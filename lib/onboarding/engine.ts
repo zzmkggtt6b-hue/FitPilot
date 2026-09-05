@@ -9,7 +9,7 @@ const prompts: Record<OnboardingState, { nl: string; en: string }> = {
   NOT_STARTED: { nl: "Welkom bij FitPilot! 🏋️ Ik help je een persoonlijk fitnessprofiel opbouwen. In welke taal wil je verder? (Nederlands/English)", en: "Welcome to FitPilot! 🏋️ I’ll help you build a personal fitness profile. Which language would you like to continue in? (Nederlands/English)" },
   LANGUAGE: { nl: "In welke taal wil je verder? 🇳🇱 Nederlands of 🇬🇧 English?", en: "Which language would you like to continue in? 🇳🇱 Nederlands or 🇬🇧 English?" },
   CONSENT: { nl: "Voordat we beginnen: je deelt persoonlijke fitnessgegevens. FitPilot gebruikt die alleen om je profiel en coaching te leveren. Ga je hiermee akkoord? (ja/nee)", en: "Before we start: you will share personal fitness data. FitPilot uses it only to provide your profile and coaching. Do you agree? (yes/no)" },
-  BASIC_PROFILE: { nl: "Wat is je leeftijd?", en: "How old are you?" },
+  BASIC_PROFILE: { nl: "Wat is je leeftijd? Je kunt je huidige leeftijd geven, of je geboortedatum in het formaat DD MM YYYY (bijvoorbeeld 11 11 1990) of als dag maand jaar (bijvoorbeeld 11 november 1990).", en: "How old are you? You can give your current age, or your date of birth in the format DD MM YYYY (for example 11 11 1990) or as day month year (for example 11 November 1990)." },
   FITNESS_PROFILE: { nl: "Hoeveel ervaring heb je met trainen?", en: "How much training experience do you have?" },
   TRAINING_PROFILE: { nl: "Waar train je meestal: sportschool, thuis of beide?", en: "Where do you usually train: gym, home or both?" },
   GOALS: { nl: "Wat is je belangrijkste doel? Bijvoorbeeld spiermassa, vetverlies, kracht, algemene fitheid, conditie of recompositie.", en: "What is your main goal? For example: muscle gain, fat loss, strength, general fitness, endurance or body recomposition." },
@@ -30,7 +30,7 @@ function isExplanationRequest(message: string) { return /\b(waarom|waarvoor|why|
 function missingPrompt(state: OnboardingState, profile: Record<string, unknown>): string {
   const en = languageFor(profile) === "en";
   if (state === "BASIC_PROFILE") {
-    if (profile.age == null) return en ? "How old are you?" : "Hoe oud ben je?";
+    if (profile.age == null) return prompts.BASIC_PROFILE[en ? "en" : "nl"];
     if (profile.height_cm == null) return en ? "What is your height in cm?" : "Wat is je lengte in cm?";
     if (profile.weight_kg == null) return en ? "What is your weight in kg?" : "Wat is je gewicht in kg?";
     return "";
@@ -177,26 +177,11 @@ export async function processOnboardingMessage(userId: string, message: string):
     await saveProfile(userId, profileFields);
     profile = await loadProfile(userId);
   }
-  if (routed.language) {
-    await saveProfile(userId, { language: routed.language });
-    profile = await loadProfile(userId);
-    currentLanguage = routed.language;
-  }
-  if (routed.extraction.intent === "restart") { await resetProfile(userId); await setState(userId, "LANGUAGE"); return prompts.LANGUAGE.nl; }
-
-  if (isProfileSummaryRequest(trimmed) || routed.extraction.intent === "question") {
-    const next = missingPrompt(state, profile);
-    return `${currentLanguage === "en" ? "Good question. Here’s what I currently have:" : "Goede vraag. Dit is wat ik momenteel van je heb:"}\n\n${summary(profile)}${next ? `\n\n${next}` : ""}`;
-  }
-  if (state === "GOALS" && isGoalAdviceRequest(trimmed)) return generateGoalAdvice(profile, currentLanguage);
-  if (state === "COMPLETED") return currentLanguage === "en" ? "Your profile is already complete. Type /restart if you want to start over." : "Je profiel is al compleet. Typ /restart als je opnieuw wilt beginnen.";
-  if (state === "REVIEW" && /^(ja|yes|y|klopt|correct)$/i.test(trimmed)) { await setState(userId, "COMPLETED", true); return currentLanguage === "en" ? "Profile confirmed! 🎉 Your FitPilot profile has been saved." : "Profiel bevestigd! 🎉 Je FitPilot-profiel is opgeslagen."; }
-  if (Object.keys(fields).length === 0) {
-    const next = missingPrompt(state, profile);
-    return currentLanguage === "en" ? `I couldn't extract any new profile information.${next ? ` ${next}` : " Please tell me a little more."}` : `Ik kon nog geen nieuwe profielinformatie vinden.${next ? ` ${next}` : " Kun je iets meer vertellen?"}`;
-  }
   const newState = nextState(state, profile);
   if (newState !== state) await setState(userId, newState);
+
+  if (newState === "GOALS" && isGoalAdviceRequest(trimmed)) return generateGoalAdvice(profile);
   if (newState === "REVIEW") return summary(profile) + (languageFor(profile) === "en" ? "\n\nDoes this look correct? Reply 'yes' to confirm, or tell me what to change." : "\n\nKlopt dit? Antwoord 'ja' om te bevestigen, of vertel wat ik moet aanpassen.");
+  if (isProfileSummaryRequest(trimmed)) return summary(profile);
   return missingPrompt(newState, profile);
 }
