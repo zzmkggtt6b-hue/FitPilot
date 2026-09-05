@@ -1,6 +1,7 @@
+import { generateGoalAdvice } from "@/lib/ai/advice";
 import { extractOnboarding } from "@/lib/ai/extraction";
 import { nextState } from "./state-machine";
-import { addMessage, ensureSession, loadProfile, resetProfile, saveProfile, setState } from "./repository";
+import { ensureSession, loadProfile, resetProfile, saveProfile, setState } from "./repository";
 import type { OnboardingState, ProfileData } from "./types";
 
 const prompts: Record<OnboardingState, { nl: string; en: string }> = {
@@ -24,7 +25,6 @@ function parseLanguage(message: string): "nl" | "en" | null {
   const value = message.trim().toLowerCase().replace(/[.!?,]+$/g, "").replace(/’/g, "'");
   if (["nederlands", "dutch", "nl", "nederland", "hollands"].includes(value)) return "nl";
   if (["english", "engels", "en", "engels talig", "engels-talig"].includes(value)) return "en";
-
   const nl = /\b(nederlands|dutch|nl|nederland|hollands)\b/i.test(value);
   const en = /\b(english|engels|en|engels talig|engels-talig)\b/i.test(value);
   const switching = /\b(speak|talk|praat|praten|taal|language|switch|wissel|change|verder|want|wil|will|let's|laten|toch|do|doen)\b/i.test(value);
@@ -39,6 +39,7 @@ function isLanguageChange(message: string) {
   return target && (verb || message.trim().split(/\s+/).length <= 2);
 }
 function isProfileSummaryRequest(message: string) { return /\b(what do you know about me|what info do you have|wat weet je (nu )?al over mij|welke informatie heb je|mijn profiel|my profile)\b/i.test(message); }
+function isGoalAdviceRequest(message: string) { return /\b(wat (kan|zou) je (mij )?(adviseren|aanraden)|wat raad je (mij )?aan|geen idee (wat|welk|welke)|ik weet (het )?niet (wat|welk|welke)|help me (choose|kiezen)|which goal|what goal|recommend.*goal|advice.*goal|doel.*advies|advies.*doel)\b/i.test(message); }
 function isStop(message: string) { return /^\/(stop|pause)$|^(stop|pauze|pause)$/i.test(message.trim()); }
 function isResume(message: string) { return /^\/(resume|continue)$|^(resume|doorgaan|continue|ga door)$/i.test(message.trim()); }
 
@@ -82,7 +83,6 @@ export async function processOnboardingMessage(userId: string, message: string):
   if (state === "PAUSED") { if (!isResume(trimmed)) return promptFor("PAUSED", profile); state = (session.paused_from_state as OnboardingState | null) ?? "BASIC_PROFILE"; await setState(userId, state); profile = await loadProfile(userId); return missingPrompt(state, profile); }
   if (isResume(trimmed)) return missingPrompt(state, profile);
 
-  // LANGUAGE is a hard deterministic boundary, just like every other onboarding state.
   if (state === "LANGUAGE") {
     const language = parseLanguage(trimmed);
     if (!language) return "Kies alsjeblieft Nederlands of English. 🇳🇱 / 🇬🇧";
@@ -91,7 +91,6 @@ export async function processOnboardingMessage(userId: string, message: string):
     return prompts.CONSENT[language];
   }
 
-  // Language changes are always handled before consent or AI extraction.
   if (isLanguageChange(trimmed)) {
     const parsed = parseLanguage(trimmed);
     if (parsed) {
@@ -103,9 +102,23 @@ export async function processOnboardingMessage(userId: string, message: string):
   }
 
   if (isProfileSummaryRequest(trimmed)) return summary(profile) + (state === "REVIEW" ? (currentLanguage === "en" ? "\n\nDoes this look correct? Reply 'yes' to confirm, or tell me what to change." : "\n\nKlopt dit? Antwoord 'ja' om te bevestigen, of vertel wat ik moet aanpassen.") : (missingPrompt(state, profile) ? `\n\n${missingPrompt(state, profile)}` : ""));
-  if (state === "CONSENT") { const consent = /^(ja|yes|y|akkoord|agree)$/i.test(trimmed); if (!consent) return currentLanguage === "en" ? "No problem. Without consent I can’t save a personal fitness profile. Send 'yes' to continue, or tell me if you want to switch language." : "Geen probleem. Zonder akkoord kan ik geen persoonlijk fitnessprofiel opslaan. Stuur 'ja' om door te gaan, of zeg het als je van taal wilt wisselen."; await saveProfile(userId, { consent: true }); await setState(userId, "BASIC_PROFILE"); profile = await loadProfile(userId); return missingPrompt("BASIC_PROFILE", profile); }
+
+  if (state === "CONSENT") {
+    const consent = /^(ja|yes|y|akkoord|agree)$/i.test(trimmed);
+    if (!consent) return currentLanguage === "en" ? "No problem. Without consent I can’t save a personal fitness profile. Send 'yes' to continue, or tell me if you want to switch language." : "Geen probleem. Zonder akkoord kan ik geen persoonlijk fitnessprofiel opslaan. Stuur 'ja' om door te gaan, of zeg het als je van taal wilt wisselen.";
+    await saveProfile(userId, { consent: true });
+    await setState(userId, "BASIC_PROFILE");
+    profile = await loadProfile(userId);
+    return missingPrompt("BASIC_PROFILE", profile);
+  }
+
+  if (state === "GOALS" && isGoalAdviceRequest(trimmed)) {
+    return generateGoalAdvice(profile, currentLanguage);
+  }
+
   if (state === "COMPLETED") return currentLanguage === "en" ? "Your profile is already complete. Type /restart if you want to start over." : "Je profiel is al compleet. Typ /restart als je opnieuw wilt beginnen.";
   if (state === "REVIEW" && /^(ja|yes|y|klopt|correct)$/i.test(trimmed)) { await setState(userId, "COMPLETED", true); return currentLanguage === "en" ? "Profile confirmed! 🎉 Your FitPilot profile has been saved." : "Profiel bevestigd! 🎉 Je FitPilot-profiel is opgeslagen."; }
+
   const extraction = await extractOnboarding({ state, message, profile });
   if (extraction.intent === "language_change" || extraction.fields.language) { const language = requestedLanguage(extraction.fields.language ?? "", currentLanguage); await saveProfile(userId, { language }); profile = await loadProfile(userId); return missingPrompt(state, profile) || (language === "en" ? "Got it. We’ll continue in English." : "Prima. We gaan verder in het Nederlands."); }
   if (extraction.intent === "restart") { await resetProfile(userId); await setState(userId, "LANGUAGE"); return prompts.LANGUAGE["nl"]; }
