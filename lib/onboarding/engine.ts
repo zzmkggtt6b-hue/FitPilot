@@ -7,11 +7,11 @@ const prompts: Record<OnboardingState, { nl: string; en: string }> = {
   NOT_STARTED: { nl: "Welkom bij FitPilot! 🏋️ Ik help je een persoonlijk fitnessprofiel opbouwen. In welke taal wil je verder? (Nederlands/English)", en: "Welcome to FitPilot! 🏋️ I’ll help you build a personal fitness profile. Which language would you like to continue in? (Nederlands/English)" },
   LANGUAGE: { nl: "In welke taal wil je verder? 🇳🇱 Nederlands of 🇬🇧 English?", en: "Which language would you like to continue in? 🇳🇱 Nederlands or 🇬🇧 English?" },
   CONSENT: { nl: "Voordat we beginnen: je deelt persoonlijke fitnessgegevens. FitPilot gebruikt die alleen om je profiel en coaching te leveren. Ga je hiermee akkoord? (ja/nee)", en: "Before we start: you will share personal fitness data. FitPilot uses it only to provide your profile and coaching. Do you agree? (yes/no)" },
-  BASIC_PROFILE: { nl: "Vertel me je leeftijd, geslacht (optioneel), lengte en gewicht. Je mag dit gewoon in één zin vertellen.", en: "Tell me your age, sex (optional), height and weight. You can give it all in one sentence." },
+  BASIC_PROFILE: { nl: "Wat is je leeftijd?", en: "How old are you?" },
   FITNESS_PROFILE: { nl: "Hoeveel ervaring heb je met trainen? Vertel ook gerust hoe regelmatig je de laatste tijd hebt getraind.", en: "How much training experience do you have? Feel free to tell me how regularly you’ve been training recently." },
-  TRAINING_PROFILE: { nl: "Waar train je meestal (sportschool, thuis of beide), hoeveel dagen per week en hoe lang duurt een training meestal?", en: "Where do you usually train (gym, home or both), how many days per week, and how long is a typical workout?" },
+  TRAINING_PROFILE: { nl: "Waar train je meestal: sportschool, thuis of beide?", en: "Where do you usually train: gym, home or both?" },
   GOALS: { nl: "Wat is je belangrijkste doel? Bijvoorbeeld spiermassa, vetverlies, kracht, algemene fitheid, conditie of recompositie.", en: "What is your main goal? For example: muscle gain, fat loss, strength, general fitness, endurance or body recomposition." },
-  PREFERENCES: { nl: "Zijn er voorkeuren, oefeningen die je graag doet, oefeningen die je wilt vermijden of materiaalbeperkingen waarmee ik rekening moet houden?", en: "Do you have any preferences, exercises you like, exercises you want to avoid, or equipment limitations I should consider?" },
+  PREFERENCES: { nl: "Zijn er voorkeuren, oefeningen die je graag doet, oefeningen die je wilt vermijden of materiaalbeperkingen waarmee ik rekening moet houden? Je kunt ook gewoon 'geen' zeggen.", en: "Do you have any preferences, exercises you like, exercises you want to avoid, or equipment limitations I should consider? You can also just say 'none'." },
   REVIEW: { nl: "", en: "" },
   COMPLETED: { nl: "Je profiel is compleet. 🎉", en: "Your profile is complete. 🎉" },
   PAUSED: { nl: "Je onboarding staat gepauzeerd. Typ 'doorgaan' om verder te gaan.", en: "Your onboarding is paused. Type 'resume' to continue." },
@@ -21,14 +21,20 @@ function languageFor(profile: Record<string, unknown>): "nl" | "en" { return pro
 function promptFor(state: OnboardingState, profile: Record<string, unknown>) { return prompts[state][languageFor(profile)]; }
 
 function parseLanguage(message: string): "nl" | "en" | null {
-  const value = message.trim().toLowerCase().replace(/[.!?]+$/g, "");
+  const value = message.trim().toLowerCase().replace(/[.!?,]+$/g, "").replace(/’/g, "'");
   if (["nederlands", "dutch", "nl", "nederland", "hollands"].includes(value)) return "nl";
   if (["english", "engels", "en", "engels talig", "engels-talig"].includes(value)) return "en";
+
+  const nl = /\b(nederlands|dutch|nl|nederland|hollands)\b/i.test(value);
+  const en = /\b(english|engels|en|engels talig|engels-talig)\b/i.test(value);
+  const switching = /\b(speak|talk|praat|praten|taal|language|switch|wissel|change|verder|want|wil|will|let's|laten|toch|do|doen)\b/i.test(value);
+  if (switching && nl && !en) return "nl";
+  if (switching && en && !nl) return "en";
   return null;
 }
 function requestedLanguage(message: string, fallback: "nl" | "en"): "nl" | "en" { return parseLanguage(message) ?? fallback; }
 function isLanguageChange(message: string) {
-  const target = /\b(english|engels|dutch|nederlands|nl|en)\b/i.test(message);
+  const target = /\b(english|engels|dutch|nederlands|nl|en|hollands)\b/i.test(message);
   const verb = /\b(speak|talk|praat|praten|taal|language|do|doen|switch|wissel|change|verder|want|wil|will|let'?s|laten|toch)\b/i.test(message);
   return target && (verb || message.trim().split(/\s+/).length <= 2);
 }
@@ -39,19 +45,23 @@ function isResume(message: string) { return /^\/(resume|continue)$|^(resume|door
 function missingPrompt(state: OnboardingState, profile: Record<string, unknown>): string {
   const en = languageFor(profile) === "en";
   if (state === "BASIC_PROFILE") {
-    const missing = [profile.age == null && "age", profile.height_cm == null && "height", profile.weight_kg == null && "weight"].filter(Boolean);
-    if (missing.length === 0) return "";
-    return en ? `I still need your ${missing.join(" and ")}.` : `Ik heb nog je ${missing.join(" en ")} nodig.`;
+    if (profile.age == null) return en ? "How old are you?" : "Hoe oud ben je?";
+    if (profile.height_cm == null) return en ? "What is your height in cm?" : "Wat is je lengte in cm?";
+    if (profile.weight_kg == null) return en ? "What is your weight in kg?" : "Wat is je gewicht in kg?";
+    return "";
   }
   if (state === "FITNESS_PROFILE" && profile.experience_level == null) return en ? "How much training experience do you have?" : "Hoeveel ervaring heb je met trainen?";
   if (state === "TRAINING_PROFILE") {
     if (profile.training_location == null) return en ? "Where do you usually train: gym, home or both?" : "Waar train je meestal: sportschool, thuis of beide?";
     if (profile.days_per_week == null) return en ? "How many days per week do you usually train?" : "Hoeveel dagen per week train je meestal?";
     if (profile.session_duration_minutes == null) return en ? "How long is your typical workout, in minutes?" : "Hoe lang duurt je training meestal, in minuten?";
+    return "";
   }
   if (state === "GOALS" && (!Array.isArray(profile.goals) || profile.goals.length === 0)) return prompts.GOALS[languageFor(profile)];
+  if (state === "PREFERENCES") return prompts.PREFERENCES[languageFor(profile)];
   return promptFor(state, profile);
 }
+
 function summary(profile: Record<string, unknown>) {
   const en = languageFor(profile) === "en"; const goals = Array.isArray(profile.goals) ? profile.goals.join(", ") : "-";
   return (en ? ["📋 Your FitPilot profile", `Age: ${profile.age ?? "-"}`, `Sex: ${profile.sex ?? "-"}`, `Height: ${profile.height_cm ?? "-"} cm`, `Weight: ${profile.weight_kg ?? "-"} kg`, `Experience: ${profile.experience_level ?? "-"}`, `Training location: ${profile.training_location ?? "-"}`, `Days per week: ${profile.days_per_week ?? "-"}`, `Session duration: ${profile.session_duration_minutes ?? "-"} min`, `Goals: ${goals}`, `Preferences/restrictions: ${profile.exercise_preferences ?? profile.exercise_restrictions ?? "-"}`] : ["📋 Je FitPilot-profiel", `Leeftijd: ${profile.age ?? "-"}`, `Geslacht: ${profile.sex ?? "-"}`, `Lengte: ${profile.height_cm ?? "-"} cm`, `Gewicht: ${profile.weight_kg ?? "-"} kg`, `Ervaring: ${profile.experience_level ?? "-"}`, `Trainingslocatie: ${profile.training_location ?? "-"}`, `Dagen per week: ${profile.days_per_week ?? "-"}`, `Duur per training: ${profile.session_duration_minutes ?? "-"} min`, `Doelen: ${goals}`, `Voorkeuren/beperkingen: ${profile.exercise_preferences ?? profile.exercise_restrictions ?? "-"}`]).join("\n");
@@ -72,7 +82,7 @@ export async function processOnboardingMessage(userId: string, message: string):
   if (state === "PAUSED") { if (!isResume(trimmed)) return promptFor("PAUSED", profile); state = (session.paused_from_state as OnboardingState | null) ?? "BASIC_PROFILE"; await setState(userId, state); profile = await loadProfile(userId); return missingPrompt(state, profile); }
   if (isResume(trimmed)) return missingPrompt(state, profile);
 
-  // LANGUAGE is a hard deterministic boundary. Do not let the generic language-change handler run first.
+  // LANGUAGE is a hard deterministic boundary, just like every other onboarding state.
   if (state === "LANGUAGE") {
     const language = parseLanguage(trimmed);
     if (!language) return "Kies alsjeblieft Nederlands of English. 🇳🇱 / 🇬🇧";
@@ -81,7 +91,7 @@ export async function processOnboardingMessage(userId: string, message: string):
     return prompts.CONSENT[language];
   }
 
-  // Language switching after LANGUAGE is handled before AI extraction.
+  // Language changes are always handled before consent or AI extraction.
   if (isLanguageChange(trimmed)) {
     const parsed = parseLanguage(trimmed);
     if (parsed) {
@@ -93,7 +103,7 @@ export async function processOnboardingMessage(userId: string, message: string):
   }
 
   if (isProfileSummaryRequest(trimmed)) return summary(profile) + (state === "REVIEW" ? (currentLanguage === "en" ? "\n\nDoes this look correct? Reply 'yes' to confirm, or tell me what to change." : "\n\nKlopt dit? Antwoord 'ja' om te bevestigen, of vertel wat ik moet aanpassen.") : (missingPrompt(state, profile) ? `\n\n${missingPrompt(state, profile)}` : ""));
-  if (state === "CONSENT") { const consent = /^(ja|yes|y|akkoord|agree)$/i.test(trimmed); if (!consent) return currentLanguage === "en" ? "No problem. Without consent I can’t save a personal fitness profile. Send 'yes' to continue, or tell me if you want to switch language." : "Geen probleem. Zonder akkoord kan ik geen persoonlijk fitnessprofiel opslaan. Stuur 'ja' om door te gaan, of zeg het als je van taal wilt wisselen."; await saveProfile(userId, { consent: true }); await setState(userId, "BASIC_PROFILE"); return prompts.BASIC_PROFILE[currentLanguage]; }
+  if (state === "CONSENT") { const consent = /^(ja|yes|y|akkoord|agree)$/i.test(trimmed); if (!consent) return currentLanguage === "en" ? "No problem. Without consent I can’t save a personal fitness profile. Send 'yes' to continue, or tell me if you want to switch language." : "Geen probleem. Zonder akkoord kan ik geen persoonlijk fitnessprofiel opslaan. Stuur 'ja' om door te gaan, of zeg het als je van taal wilt wisselen."; await saveProfile(userId, { consent: true }); await setState(userId, "BASIC_PROFILE"); profile = await loadProfile(userId); return missingPrompt("BASIC_PROFILE", profile); }
   if (state === "COMPLETED") return currentLanguage === "en" ? "Your profile is already complete. Type /restart if you want to start over." : "Je profiel is al compleet. Typ /restart als je opnieuw wilt beginnen.";
   if (state === "REVIEW" && /^(ja|yes|y|klopt|correct)$/i.test(trimmed)) { await setState(userId, "COMPLETED", true); return currentLanguage === "en" ? "Profile confirmed! 🎉 Your FitPilot profile has been saved." : "Profiel bevestigd! 🎉 Je FitPilot-profiel is opgeslagen."; }
   const extraction = await extractOnboarding({ state, message, profile });
