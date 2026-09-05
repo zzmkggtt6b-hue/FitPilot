@@ -28,6 +28,15 @@ PROFILE FIELDS
 Supported fields are:
 language, consent, age, sex, height_cm, weight_kg, experience_level, training_location, days_per_week, session_duration_minutes, goals, preferred_days, preferred_time, equipment, exercise_preferences, exercise_restrictions.
 
+AGE — STRICT DATA QUALITY RULE
+- Accept age only when the user explicitly states how old they are, e.g. "I'm 35", "I am 35 years old", "ik ben 35 jaar", "leeftijd: 35".
+- A bare number such as "35" must NOT be interpreted as age, even when the current question asks for age.
+- A birth date may be used to derive age only when it is supplied in a standard unambiguous numeric date format with separators: YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD, DD-MM-YYYY, DD/MM/YYYY, or DD.MM.YYYY.
+- Do NOT interpret space-separated numbers such as "11 11 1990", "11 1990 11", or "111190" as a birth date.
+- Do not infer age from a year alone, a partial date, or contextual guesses.
+- If a birth date is ambiguous or not in one of the standard formats above, ask the user to provide their age or the full birth date in a standard format.
+- When a valid full birth date is provided, derive the user's current age accurately from today's date; do not store the birth date because the profile schema stores age.
+
 MULTI-FIELD EXTRACTION
 Always scan the whole message. Example: "I'm 35, male, 173 cm and 71 kg" must extract age=35, sex=male, height_cm=173 and weight_kg=71 even if FitPilot asked only for age.
 
