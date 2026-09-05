@@ -47,7 +47,7 @@ function deterministicFields(message: string, state: OnboardingState, profile: R
 
   const dateOfBirth = value.match(/\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b|\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b/);
   if (dateOfBirth) {
-    const year = dateOfBirth[1] ?? dateOfBirth[4];
+    const year = dateOfBirth[1] ?? dateOfBirth[6];
     const month = dateOfBirth[1] ? dateOfBirth[2] : dateOfBirth[5];
     const day = dateOfBirth[1] ? dateOfBirth[3] : dateOfBirth[4];
     const derivedAge = calculateAge(`${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`);
