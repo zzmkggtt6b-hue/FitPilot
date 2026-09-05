@@ -8,6 +8,21 @@ export type ProfileRoute = {
   language?: "nl" | "en";
 };
 
+const MONTHS: Record<string, number> = {
+  januari: 1, january: 1,
+  februari: 2, february: 2,
+  maart: 3, march: 3,
+  april: 4,
+  mei: 5, may: 5,
+  juni: 6, june: 6,
+  juli: 7, july: 7,
+  augustus: 8, august: 8,
+  september: 9,
+  oktober: 10, october: 10,
+  november: 11,
+  december: 12,
+};
+
 function calculateAge(dateOfBirth: string): number | null {
   const match = dateOfBirth.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return null;
@@ -35,13 +50,40 @@ function calculateAge(dateOfBirth: string): number | null {
   return age >= 13 && age <= 100 ? age : null;
 }
 
+function parseBirthDate(value: string): number | null {
+  const normalized = value.trim().toLowerCase().replace(/,/g, " ").replace(/\s+/g, " ");
+
+  // Accepted numeric format: day month year. Separators may be spaces,
+  // hyphens, slashes or dots, but the order is always DD MM YYYY.
+  const numeric = normalized.match(/(?:^|\b)(\d{1,2})[\s./-](\d{1,2})[\s./-](\d{4})(?:\b|$)/);
+  if (numeric) {
+    const day = Number(numeric[1]);
+    const month = Number(numeric[2]);
+    const year = Number(numeric[3]);
+    return calculateAge(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+  }
+
+  // Accepted written format: day month-name year, in Dutch or English.
+  // Examples: "11 november 1990", "11 November 1990".
+  const written = normalized.match(/(?:^|\b)(\d{1,2})\s+([a-z]+)\s+(\d{4})(?:\b|$)/i);
+  if (written) {
+    const day = Number(written[1]);
+    const month = MONTHS[written[2]];
+    const year = Number(written[3]);
+    if (month) {
+      return calculateAge(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+    }
+  }
+
+  return null;
+}
+
 function deterministicFields(message: string, state: OnboardingState, profile: Record<string, unknown>): Partial<ProfileData> {
   const value = message.toLowerCase().replace(/,/g, ".");
   const fields: Partial<ProfileData> = {};
 
   // Age is intentionally strict. Outside the explicit age step, a bare number
-  // is never an age. At the age step, however, a single 13-100 number is
-  // unambiguous because FitPilot has just asked for the user's age.
+  // is never an age. At the age step, a single 13-100 number is unambiguous.
   const age = value.match(/\b(?:age|leeftijd)\s*[:=]?\s*(\d{2})\b|\bi(?:'m| am| ben)\s+(\d{2})\b|\b(\d{2})\s*(?:years?\s*old|jaar(?:\s+oud)?)\b/);
   if (age) {
     const parsedAge = Number(age[1] ?? age[2] ?? age[3]);
@@ -54,12 +96,8 @@ function deterministicFields(message: string, state: OnboardingState, profile: R
     }
   }
 
-  const dateOfBirth = value.match(/\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b|\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b/);
-  if (dateOfBirth) {
-    const year = dateOfBirth[1] ?? dateOfBirth[6];
-    const month = dateOfBirth[1] ? dateOfBirth[2] : dateOfBirth[5];
-    const day = dateOfBirth[1] ? dateOfBirth[3] : dateOfBirth[4];
-    const derivedAge = calculateAge(`${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`);
+  if (state === "BASIC_PROFILE" && profile.age == null) {
+    const derivedAge = parseBirthDate(message);
     if (derivedAge !== null) fields.age = derivedAge;
   }
 
@@ -76,9 +114,6 @@ function deterministicFields(message: string, state: OnboardingState, profile: R
   const kg = value.match(/\b(\d{2,3}(?:\.\d)?)\s*(?:kg|kilo(?:s)?|kilogram(?:s)?)\b/);
   if (kg) fields.weight_kg = Number(kg[1]);
 
-  // Telegram users often answer a single requested number without its unit.
-  // Interpret it only when the current state makes the meaning unambiguous.
-  // Age is handled separately above and is only allowed during the age step.
   const bareNumber = value.match(/^\s*(\d{1,3}(?:\.\d+)?)\s*$/)?.[1];
   if (bareNumber) {
     const number = Number(bareNumber);
@@ -122,7 +157,8 @@ function hasEvidenceForField(field: keyof ProfileData, message: string, state: O
     case "age":
       return /\b(age|leeftijd|i(?:'m| am| ben)\s+\d{2}|\d{2}\s*(?:years?\s*old|jaar(?:\s+oud)?))\b/i.test(value) ||
         (state === "BASIC_PROFILE" && profile.age == null && /^\s*\d{2}\s*$/.test(value)) ||
-        /\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{4}\b/i.test(value);
+        /\b\d{1,2}[\s./-]\d{1,2}[\s./-]\d{4}\b/i.test(value) ||
+        /\b\d{1,2}\s+(?:januari|january|februari|february|maart|march|april|mei|may|juni|june|juli|july|augustus|august|september|oktober|october|november|december)\s+\d{4}\b/i.test(value);
     case "sex": return /\b(male|female|man|vrouw|mannelijk|vrouwelijk|woman)\b/i.test(value);
     case "height_cm": return /\b\d{2,3}(?:[.,]\d)?\s*(?:cm|centimeter(?:s)?)\b/i.test(value) || /(?:^|\s)\d\s*(?:ft|feet|foot|')\s*\d{0,2}/i.test(value) || (state === "BASIC_PROFILE" && profile.height_cm == null && /^\s*\d{3}(?:[.,]\d+)?\s*$/.test(value));
     case "weight_kg": return /\b\d{2,3}(?:[.,]\d+)?\s*(?:kg|kilo(?:s)?|kilogram(?:s)?)\b/i.test(value) || (state === "BASIC_PROFILE" && profile.weight_kg == null && /^\s*\d{2,3}(?:[.,]\d+)?\s*$/.test(value));
