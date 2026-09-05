@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { randomUUID } from "node:crypto";
 import type { OnboardingState, ProfileData } from "./types";
 
 export async function getOrCreateUser(telegramUserId: number, username?: string) {
@@ -42,10 +43,12 @@ export async function resetProfile(userId: string) {
   ]); const firstError = results.find((r) => r.error)?.error; if (firstError) throw firstError;
 }
 export async function setState(userId: string, state: OnboardingState, completed = false, pausedFromState?: OnboardingState | null) {
-  const { error } = await supabaseAdmin.from("onboarding_sessions").update({ current_state: state, completed, completed_at: completed ? new Date().toISOString() : null, paused_from_state: state === "PAUSED" ? (pausedFromState ?? null) : null }).eq("user_id", userId); if (error) throw error;
+  const { data, error } = await supabaseAdmin.from("onboarding_sessions").update({ current_state: state, completed, completed_at: completed ? new Date().toISOString() : null, paused_from_state: state === "PAUSED" ? (pausedFromState ?? null) : null }).eq("user_id", userId).select("id,current_state").maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error(`Onboarding session not found while setting state to ${state}`);
 }
 export async function acquireProcessingLock(userId: string, timeoutMs = 15000): Promise<string> {
-  const token = crypto.randomUUID(); const deadline = Date.now() + timeoutMs;
+  const token = randomUUID(); const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) { const until = new Date(Date.now() + 30000).toISOString(); const { data, error } = await supabaseAdmin.from("onboarding_sessions").update({ processing_until: until, processing_token: token }).eq("user_id", userId).or(`processing_until.is.null,processing_until.lt.${new Date().toISOString()}`).select("id").maybeSingle(); if (error) throw error; if (data) return token; await new Promise((resolve) => setTimeout(resolve, 150)); }
   throw new Error("Could not acquire onboarding processing lock");
 }
