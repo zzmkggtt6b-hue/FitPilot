@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import { env } from "@/lib/config";
+import { PROFILE_BUILDER_SYSTEM_PROMPT } from "./prompts/profile-builder";
 import type { OnboardingState, ExtractionResult } from "@/lib/onboarding/types";
 
 const client = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
@@ -17,6 +18,8 @@ const extractionSchema = z.object({
     preferred_days: z.array(z.string()).optional(), preferred_time: z.string().optional(), equipment: z.array(z.string()).optional(),
     exercise_preferences: z.string().optional(), exercise_restrictions: z.string().optional()
   }),
+  corrections: z.array(z.string()).optional(),
+  needs_clarification: z.array(z.string()).optional(),
   reply_hint: z.string().optional()
 });
 
@@ -36,6 +39,8 @@ const jsonSchema = {
         exercise_preferences: { type: "string" }, exercise_restrictions: { type: "string" }
       }
     },
+    corrections: { type: "array", items: { type: "string" } },
+    needs_clarification: { type: "array", items: { type: "string" } },
     reply_hint: { type: "string" }
   },
   required: ["intent", "fields"]
@@ -44,7 +49,7 @@ const jsonSchema = {
 export async function extractOnboarding(input: { state: OnboardingState; message: string; profile: Record<string, unknown> }): Promise<ExtractionResult> {
   const response = await client.models.generateContent({
     model,
-    contents: `You are FitPilot's onboarding extraction engine. Extract only information explicitly stated or safely implied by the user's message. Never invent values. Current state: ${input.state}. Existing profile: ${JSON.stringify(input.profile)}. Classify intent and return only fields supported by the schema.\n\nUser message: ${input.message}`,
+    contents: `${PROFILE_BUILDER_SYSTEM_PROMPT}\n\nCURRENT ONBOARDING STATE:\n${input.state}\n\nEXISTING PROFILE:\n${JSON.stringify(input.profile)}\n\nUSER MESSAGE:\n${input.message}`,
     config: {
       responseMimeType: "application/json",
       responseSchema: jsonSchema,
