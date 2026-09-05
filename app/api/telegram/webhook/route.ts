@@ -35,8 +35,9 @@ export async function POST(request: NextRequest) {
     userId = user.id;
     lockToken = await acquireProcessingLock(user.id);
 
-    // Telegram may redeliver the same update. The unique update id makes processing idempotent.
-    const isNew = await addTelegramUserMessage(user.id, message.text, update.update_id ?? message.message_id);
+    // Telegram's update_id is globally unique for updates delivered by a bot.
+    // If Telegram redelivers the same update, log it once and do not answer twice.
+    const isNew = await addTelegramUserMessage(user.id, message.text, update.update_id);
     if (!isNew) return NextResponse.json({ ok: true });
 
     const reply = message.text.trim() === "/start"
