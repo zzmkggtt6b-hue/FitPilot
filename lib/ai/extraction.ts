@@ -1,9 +1,9 @@
-import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import { env } from "@/lib/config";
 import type { OnboardingState, ExtractionResult } from "@/lib/onboarding/types";
 
-const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+const client = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
 const extractionSchema = z.object({
   intent: z.enum(["answer", "question", "correction", "restart", "language_change", "general"]),
@@ -41,12 +41,16 @@ const jsonSchema = {
 };
 
 export async function extractOnboarding(input: { state: OnboardingState; message: string; profile: Record<string, unknown> }): Promise<ExtractionResult> {
-  const response = await client.responses.create({
-    model: env.OPENAI_MODEL,
-    store: false,
-    instructions: `You are FitPilot's onboarding extraction engine. Extract only information explicitly stated or safely implied by the user's message. Never invent values. Current state: ${input.state}. Existing profile: ${JSON.stringify(input.profile)}. Classify intent and return only fields supported by the schema.`,
-    input: input.message,
-    text: { format: { type: "json_schema", name: "fitpilot_onboarding", strict: false, schema: jsonSchema } }
+  const response = await client.models.generateContent({
+    model: env.GEMINI_MODEL,
+    contents: `You are FitPilot's onboarding extraction engine. Extract only information explicitly stated or safely implied by the user's message. Never invent values. Current state: ${input.state}. Existing profile: ${JSON.stringify(input.profile)}. Classify intent and return only fields supported by the schema.\n\nUser message: ${input.message}`,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: jsonSchema,
+    },
   });
-  return extractionSchema.parse(JSON.parse(response.output_text));
+
+  const text = response.text;
+  if (!text) throw new Error("Gemini returned an empty response");
+  return extractionSchema.parse(JSON.parse(text));
 }
