@@ -153,8 +153,6 @@ export async function processOnboardingMessage(userId: string, message: string):
 
   if (/^\/restart$/i.test(trimmed)) { await resetProfile(userId); await setState(userId, "LANGUAGE"); return prompts.LANGUAGE.nl; }
 
-  // Detect supported language from the actual message, not only explicit
-  // "English/Nederlands" commands. This keeps every next response aligned.
   const detectedLanguage = detectLanguage(trimmed);
   if (detectedLanguage && detectedLanguage !== currentLanguage) {
     await saveProfile(userId, { language: detectedLanguage });
@@ -188,7 +186,7 @@ export async function processOnboardingMessage(userId: string, message: string):
   if (isResume(trimmed)) return missingPrompt(state, profile);
 
   const directLanguage = parseLanguage(trimmed);
-  if (directLanguage && state !== "LANGUAGE") {
+  if (directLanguage) {
     await saveProfile(userId, { language: directLanguage });
     profile = await loadProfile(userId);
     currentLanguage = directLanguage;
