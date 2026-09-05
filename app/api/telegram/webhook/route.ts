@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("FitPilot Telegram webhook error", error);
-    await sendTelegramMessage(message.chat.id, "Sorry, er ging iets mis. Probeer het over een moment opnieuw.");
+    try { await sendTelegramMessage(message.chat.id, "Sorry, er ging iets mis. Probeer het over een moment opnieuw."); } catch (sendError) { console.error("FitPilot Telegram error reply failed", sendError); }
     return NextResponse.json({ ok: false }, { status: 500 });
   }
 }
