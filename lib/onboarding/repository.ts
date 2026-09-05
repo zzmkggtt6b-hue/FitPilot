@@ -66,9 +66,53 @@ export async function saveProfile(userId: string, data: ProfileData) {
   }
 }
 
-export async function setState(userId: string, state: OnboardingState, completed = false) {
-  const { error } = await supabaseAdmin.from("onboarding_sessions").update({ current_state: state, completed, completed_at: completed ? new Date().toISOString() : null }).eq("user_id", userId);
+export async function setState(userId: string, state: OnboardingState, completed = false, pausedFromState?: OnboardingState | null) {
+  const values: Record<string, unknown> = {
+    current_state: state,
+    completed,
+    completed_at: completed ? new Date().toISOString() : null,
+    paused_from_state: state === "PAUSED" ? (pausedFromState ?? null) : null,
+  };
+  const { error } = await supabaseAdmin.from("onboarding_sessions").update(values).eq("user_id", userId);
   if (error) throw error;
+}
+
+export async function acquireProcessingLock(userId: string, timeoutMs = 15000): Promise<string> {
+  const token = crypto.randomUUID();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const until = new Date(Date.now() + 30000).toISOString();
+    const { data, error } = await supabaseAdmin.from("onboarding_sessions")
+      .update({ processing_until: until, processing_token: token })
+      .eq("user_id", userId)
+      .or(`processing_until.is.null,processing_until.lt.${new Date().toISOString()}`)
+      .select("id")
+      .maybeSingle();
+    if (error) throw error;
+    if (data) return token;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error("Could not acquire onboarding processing lock");
+}
+
+export async function releaseProcessingLock(userId: string, token: string) {
+  const { error } = await supabaseAdmin.from("onboarding_sessions")
+    .update({ processing_until: null, processing_token: null })
+    .eq("user_id", userId)
+    .eq("processing_token", token);
+  if (error) throw error;
+}
+
+export async function addTelegramUserMessage(userId: string, content: string, telegramUpdateId?: number): Promise<boolean> {
+  const { error } = await supabaseAdmin.from("conversation_messages").insert({
+    user_id: userId,
+    role: "user",
+    content,
+    telegram_update_id: telegramUpdateId ?? null,
+  });
+  if (!error) return true;
+  if (error.code === "23505" && telegramUpdateId != null) return false;
+  throw error;
 }
 
 export async function addMessage(userId: string, role: "user" | "assistant", content: string) {
