@@ -25,23 +25,35 @@ export async function ensureSession(userId: string) {
 }
 
 export async function loadProfile(userId: string): Promise<Record<string, unknown>> {
-  const [profile, training, prefs, goals] = await Promise.all([
+  const [user, profile, training, prefs, goals] = await Promise.all([
+    supabaseAdmin.from("users").select("language,consent_at").eq("id", userId).single(),
     supabaseAdmin.from("profiles").select("*").eq("user_id", userId).maybeSingle(),
     supabaseAdmin.from("training_profiles").select("*").eq("user_id", userId).maybeSingle(),
     supabaseAdmin.from("user_preferences").select("*").eq("user_id", userId).maybeSingle(),
     supabaseAdmin.from("fitness_goals").select("goal,priority").eq("user_id", userId).order("priority")
   ]);
-  if (profile.error || training.error || prefs.error || goals.error) throw profile.error ?? training.error ?? prefs.error ?? goals.error;
-  return { ...(profile.data ?? {}), ...(training.data ?? {}), ...(prefs.data ?? {}), goals: (goals.data ?? []).map((g) => g.goal) };
+  if (user.error || profile.error || training.error || prefs.error || goals.error) throw user.error ?? profile.error ?? training.error ?? prefs.error ?? goals.error;
+  return { ...(user.data ?? {}), ...(profile.data ?? {}), ...(training.data ?? {}), ...(prefs.data ?? {}), goals: (goals.data ?? []).map((g) => g.goal) };
 }
 
 export async function saveProfile(userId: string, data: ProfileData) {
-  const { language, ...rest } = data;
-  const userUpdate = language ? supabaseAdmin.from("users").update({ language, updated_at: new Date().toISOString() }).eq("id", userId) : Promise.resolve({ error: null });
-  const profileUpdate = supabaseAdmin.from("profiles").upsert({ user_id: userId, age: rest.age, sex: rest.sex, height_cm: rest.height_cm, weight_kg: rest.weight_kg, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
-  const trainingUpdate = supabaseAdmin.from("training_profiles").upsert({ user_id: userId, experience_level: rest.experience_level, training_location: rest.training_location, days_per_week: rest.days_per_week, session_duration_minutes: rest.session_duration_minutes, equipment: rest.equipment ?? [], updated_at: new Date().toISOString() }, { onConflict: "user_id" });
-  const prefsUpdate = supabaseAdmin.from("user_preferences").upsert({ user_id: userId, preferred_days: rest.preferred_days ?? [], preferred_time: rest.preferred_time, exercise_preferences: rest.exercise_preferences, exercise_restrictions: rest.exercise_restrictions, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
-  const results = await Promise.all([userUpdate, profileUpdate, trainingUpdate, prefsUpdate]);
+  const now = new Date().toISOString();
+  const userValues: Record<string, unknown> = { updated_at: now };
+  if (data.language !== undefined) userValues.language = data.language;
+  if (data.consent === true) userValues.consent_at = now;
+  const profileValues: Record<string, unknown> = { user_id: userId, updated_at: now };
+  for (const key of ["age", "sex", "height_cm", "weight_kg"] as const) if (data[key] !== undefined) profileValues[key] = data[key];
+  const trainingValues: Record<string, unknown> = { user_id: userId, updated_at: now };
+  for (const key of ["experience_level", "training_location", "days_per_week", "session_duration_minutes", "equipment"] as const) if (data[key] !== undefined) trainingValues[key] = data[key];
+  const prefsValues: Record<string, unknown> = { user_id: userId, updated_at: now };
+  for (const key of ["preferred_days", "preferred_time", "exercise_preferences", "exercise_restrictions"] as const) if (data[key] !== undefined) prefsValues[key] = data[key];
+
+  const results = await Promise.all([
+    supabaseAdmin.from("users").update(userValues).eq("id", userId),
+    supabaseAdmin.from("profiles").upsert(profileValues, { onConflict: "user_id" }),
+    supabaseAdmin.from("training_profiles").upsert(trainingValues, { onConflict: "user_id" }),
+    supabaseAdmin.from("user_preferences").upsert(prefsValues, { onConflict: "user_id" })
+  ]);
   const firstError = results.find((r) => r.error)?.error;
   if (firstError) throw firstError;
   if (data.goals) {
