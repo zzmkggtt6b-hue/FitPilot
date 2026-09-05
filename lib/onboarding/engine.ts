@@ -147,8 +147,6 @@ export async function processOnboardingMessage(userId: string, message: string):
     await saveProfile(userId, { consent: true }); await setState(userId, "BASIC_PROFILE"); profile = await loadProfile(userId); currentLanguage = languageFor(profile); return missingPrompt("BASIC_PROFILE", profile);
   }
 
-  // Strict one-field gate: at every onboarding step, only the information currently requested
-  // may be accepted. Language changes and stop/pause commands remain global exceptions.
   const strictField = currentStrictField(state, profile);
   if (strictField) {
     const prompt = missingPrompt(state, profile);
@@ -166,7 +164,7 @@ export async function processOnboardingMessage(userId: string, message: string):
     profile = await loadProfile(userId);
     const newState = nextState(state, profile);
     if (newState !== state) await setState(userId, newState);
-    if (newState === "REVIEW") return summary(profile) + (languageFor(profile) === "en" ? "\n\nDoes this look correct? Reply 'yes' to confirm, or tell me what to change." : "\n\nKlopt dit? Antwoord 'ja' om te bevestigen, of vertel wat ik moet aanpassen.");
+    if (newState === "REVIEW") return summary(profile) + (languageFor(profile) === "en" ? "\n\nDoes this look correct? Reply 'yes' to confirm, or tell me what to change." : "\n\nKlopt dit? Antwoord 'ja' om te bevestigen, of vertel me wat ik moet aanpassen.");
     return missingPrompt(newState, profile);
   }
 
@@ -180,7 +178,7 @@ export async function processOnboardingMessage(userId: string, message: string):
   const newState = nextState(state, profile);
   if (newState !== state) await setState(userId, newState);
 
-  if (newState === "GOALS" && isGoalAdviceRequest(trimmed)) return generateGoalAdvice(profile);
+  if (newState === "GOALS" && isGoalAdviceRequest(trimmed)) return generateGoalAdvice(profile, languageFor(profile));
   if (newState === "REVIEW") return summary(profile) + (languageFor(profile) === "en" ? "\n\nDoes this look correct? Reply 'yes' to confirm, or tell me what to change." : "\n\nKlopt dit? Antwoord 'ja' om te bevestigen, of vertel wat ik moet aanpassen.");
   if (isProfileSummaryRequest(trimmed)) return summary(profile);
   return missingPrompt(newState, profile);
