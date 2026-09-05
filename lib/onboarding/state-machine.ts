@@ -4,6 +4,7 @@ export function nextState(state: OnboardingState, profile: Record<string, unknow
   if (state === "NOT_STARTED") return "LANGUAGE";
   if (state === "LANGUAGE") return "CONSENT";
   if (state === "CONSENT") return "BASIC_PROFILE";
+  if (state === "PAUSED" || state === "COMPLETED") return state;
 
   const hasBasic = profile.age != null && profile.height_cm != null && profile.weight_kg != null;
   if (state === "BASIC_PROFILE" && hasBasic) return "FITNESS_PROFILE";
