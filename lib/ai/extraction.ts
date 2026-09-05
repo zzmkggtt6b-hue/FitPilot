@@ -4,6 +4,7 @@ import { env } from "@/lib/config";
 import type { OnboardingState, ExtractionResult } from "@/lib/onboarding/types";
 
 const client = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
+const model = env.GEMINI_MODEL === "gemini-2.5-flash" ? "gemini-3.6-flash" : env.GEMINI_MODEL;
 
 const extractionSchema = z.object({
   intent: z.enum(["answer", "question", "correction", "restart", "language_change", "general"]),
@@ -42,7 +43,7 @@ const jsonSchema = {
 
 export async function extractOnboarding(input: { state: OnboardingState; message: string; profile: Record<string, unknown> }): Promise<ExtractionResult> {
   const response = await client.models.generateContent({
-    model: env.GEMINI_MODEL,
+    model,
     contents: `You are FitPilot's onboarding extraction engine. Extract only information explicitly stated or safely implied by the user's message. Never invent values. Current state: ${input.state}. Existing profile: ${JSON.stringify(input.profile)}. Classify intent and return only fields supported by the schema.\n\nUser message: ${input.message}`,
     config: {
       responseMimeType: "application/json",
