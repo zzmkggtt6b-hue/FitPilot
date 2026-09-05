@@ -9,7 +9,7 @@ const prompts: Record<OnboardingState, { nl: string; en: string }> = {
   NOT_STARTED: { nl: "Welkom bij FitPilot! 🏋️ Ik help je een persoonlijk fitnessprofiel opbouwen. In welke taal wil je verder? (Nederlands/English)", en: "Welcome to FitPilot! 🏋️ I’ll help you build a personal fitness profile. Which language would you like to continue in? (Nederlands/English)" },
   LANGUAGE: { nl: "In welke taal wil je verder? 🇳🇱 Nederlands of 🇬🇧 English?", en: "Which language would you like to continue in? 🇳🇱 Nederlands or 🇬🇧 English?" },
   CONSENT: { nl: "Voordat we beginnen: je deelt persoonlijke fitnessgegevens. FitPilot gebruikt die alleen om je profiel en coaching te leveren. Ga je hiermee akkoord? (ja/nee)", en: "Before we start: you will share personal fitness data. FitPilot uses it only to provide your profile and coaching. Do you agree? (yes/no)" },
-  BASIC_PROFILE: { nl: "Wat is je leeftijd? Je mag leeftijd, geslacht, lengte en gewicht ook in één bericht sturen.", en: "How old are you? You can also send your age, sex, height and weight in one message." },
+  BASIC_PROFILE: { nl: "Wat is je leeftijd?", en: "How old are you?" },
   FITNESS_PROFILE: { nl: "Hoeveel ervaring heb je met trainen? Vertel ook gerust hoe regelmatig je de laatste tijd hebt getraind.", en: "How much training experience do you have? Feel free to tell me how regularly you’ve been training recently." },
   TRAINING_PROFILE: { nl: "Waar train je meestal: sportschool, thuis of beide? Je kunt ook meteen je trainingsdagen en duur noemen.", en: "Where do you usually train: gym, home or both? You can also include your training days and typical session duration." },
   GOALS: { nl: "Wat is je belangrijkste doel? Bijvoorbeeld spiermassa, vetverlies, kracht, algemene fitheid, conditie of recompositie.", en: "What is your main goal? For example: muscle gain, fat loss, strength, general fitness, endurance or body recomposition." },
@@ -25,6 +25,23 @@ function isProfileSummaryRequest(message: string) { return /\b(what do you know 
 function isGoalAdviceRequest(message: string) { return /\b(wat (kan|zou) je (mij )?(adviseren|aanraden)|wat raad je (mij )?aan|geen idee (wat|welk|welke)|ik weet (het )?niet (wat|welk|welke)|help me (choose|kiezen)|which goal|what goal|recommend.*goal|advice.*goal|doel.*advies|advies.*doel)\b/i.test(message); }
 function isStop(message: string) { return /^\/(stop|pause)$|^(stop|pauze|pause)$/i.test(message.trim()); }
 function isResume(message: string) { return /^\/(resume|continue)$|^(resume|doorgaan|continue|ga door)$/i.test(message.trim()); }
+
+function isAgeExplanationRequest(message: string): boolean {
+  return /\b(waarom|waarvoor|waarom heb je|waarom moet ik|waarom wil je|waar is het voor|why|what.*need.*for|why.*need|why.*age|why.*birthday|why.*birth date)\b/i.test(message) &&
+    /\b(leeftijd|age|geboortedatum|birthday|birth date|birthdate|nodig|need|nodig hebben|necessary)\b/i.test(message);
+}
+
+function ageGateResponse(profile: Record<string, unknown>): string {
+  return languageFor(profile) === "en"
+    ? "I only need your age at this step. This is only for the onboarding flow, so I can build your personal fitness profile correctly. You can give your current age or a birth date in a standard format (for example 11-11-1990 or 1990-11-11). If you’d rather not provide it, you can stop or pause the onboarding."
+    : "Ik heb bij deze stap alleen je leeftijd nodig. Dit is uitsluitend voor de onboarding, zodat ik je persoonlijke fitnessprofiel correct kan opbouwen. Je kunt je huidige leeftijd geven of een geboortedatum in een standaard formaat (bijvoorbeeld 11-11-1990 of 1990-11-11). Als je dit liever niet geeft, kun je de onboarding stoppen of pauzeren.";
+}
+
+function ageOnlyResponse(profile: Record<string, unknown>): string {
+  return languageFor(profile) === "en"
+    ? "Please give me your current age, or a birth date in a standard format such as 11-11-1990 or 1990-11-11. This step is only part of the onboarding."
+    : "Geef me je huidige leeftijd, of een geboortedatum in een standaard formaat zoals 11-11-1990 of 1990-11-11. Deze stap is alleen onderdeel van de onboarding.";
+}
 
 function missingPrompt(state: OnboardingState, profile: Record<string, unknown>): string {
   const en = languageFor(profile) === "en";
@@ -84,7 +101,7 @@ export async function processOnboardingMessage(userId: string, message: string):
   }
   if (isResume(trimmed)) return missingPrompt(state, profile);
 
-  // Language selection/change always has priority, including during the consent gate.
+  // Language selection/change always has priority, including during the consent gate and age gate.
   const directLanguage = parseLanguage(trimmed);
   if (directLanguage && state !== "LANGUAGE") {
     await saveProfile(userId, { language: directLanguage });
@@ -108,6 +125,26 @@ export async function processOnboardingMessage(userId: string, message: string):
     const consent = /^(ja|yes|y|akkoord|agree|i agree|ik ga akkoord)$/i.test(trimmed);
     if (!consent) return currentLanguage === "en" ? "No problem. Without consent I can’t save a personal fitness profile. Send 'yes' to continue, or tell me if you want to switch language." : "Geen probleem. Zonder akkoord kan ik geen persoonlijk fitnessprofiel opslaan. Stuur 'ja' om door te gaan, of zeg het als je van taal wilt wisselen.";
     await saveProfile(userId, { consent: true }); await setState(userId, "BASIC_PROFILE"); profile = await loadProfile(userId); currentLanguage = languageFor(profile); return missingPrompt("BASIC_PROFILE", profile);
+  }
+
+  // AGE GATE: while age is missing, do not let the AI route unrelated questions or profile facts.
+  // Only explicit age / standard birth date, language changes, or an explanation request can pass.
+  if (state === "BASIC_PROFILE" && profile.age == null) {
+    if (isAgeExplanationRequest(trimmed)) return ageGateResponse(profile);
+
+    const routedAge = await routeProfileMessage({ state, message, profile, currentLanguage });
+    const age = routedAge.fields.age;
+    const hasOnlyAge = age != null && Object.keys(routedAge.fields).every((key) => key === "age" || key === "language");
+
+    if (hasOnlyAge) {
+      await saveProfile(userId, { age });
+      profile = await loadProfile(userId);
+      const newState = nextState(state, profile);
+      if (newState !== state) await setState(userId, newState);
+      return missingPrompt(newState, profile);
+    }
+
+    return ageOnlyResponse(profile);
   }
 
   const routed = await routeProfileMessage({ state, message, profile, currentLanguage });
