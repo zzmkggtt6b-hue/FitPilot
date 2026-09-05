@@ -5,6 +5,7 @@ create table if not exists public.users (
   telegram_user_id bigint unique not null,
   username text,
   language text,
+  consent_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
