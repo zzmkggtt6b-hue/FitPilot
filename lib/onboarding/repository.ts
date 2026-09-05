@@ -40,6 +40,7 @@ export async function resetProfile(userId: string) {
     supabaseAdmin.from("fitness_goals").delete().eq("user_id", userId), supabaseAdmin.from("profiles").delete().eq("user_id", userId),
     supabaseAdmin.from("training_profiles").delete().eq("user_id", userId), supabaseAdmin.from("user_preferences").delete().eq("user_id", userId),
     supabaseAdmin.from("users").update({ language: null, consent_at: null, updated_at: new Date().toISOString() }).eq("id", userId),
+    supabaseAdmin.from("onboarding_sessions").update({ current_state: "NOT_STARTED", completed: false, completed_at: null, paused_from_state: null }).eq("user_id", userId),
   ]); const firstError = results.find((r) => r.error)?.error; if (firstError) throw firstError;
 }
 export async function setState(userId: string, state: OnboardingState, completed = false, pausedFromState?: OnboardingState | null) {
