@@ -8,12 +8,51 @@ export type ProfileRoute = {
   language?: "nl" | "en";
 };
 
+function calculateAge(dateOfBirth: string): number | null {
+  const match = dateOfBirth.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const dob = new Date(Date.UTC(year, month - 1, day));
+
+  // Reject impossible dates instead of letting JavaScript normalize them.
+  if (
+    dob.getUTCFullYear() !== year ||
+    dob.getUTCMonth() !== month - 1 ||
+    dob.getUTCDate() !== day ||
+    dob > today
+  ) return null;
+
+  let age = today.getUTCFullYear() - year;
+  const birthdayPassed =
+    today.getUTCMonth() > month - 1 ||
+    (today.getUTCMonth() === month - 1 && today.getUTCDate() >= day);
+  if (!birthdayPassed) age -= 1;
+
+  return age >= 13 && age <= 100 ? age : null;
+}
+
 function deterministicFields(message: string, state: OnboardingState, profile: Record<string, unknown>): Partial<ProfileData> {
   const value = message.toLowerCase().replace(/,/g, ".");
   const fields: Partial<ProfileData> = {};
 
+  // Age must be explicit, or derived from a complete birth date in a standard
+  // numeric format. A bare number is deliberately never treated as an age.
   const age = value.match(/\b(?:age|leeftijd)\s*[:=]?\s*(\d{2})\b|\bi(?:'m| am| ben)\s+(\d{2})\b/);
   if (age) fields.age = Number(age[1] ?? age[2]);
+
+  const dateOfBirth = value.match(/\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b|\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b/);
+  if (dateOfBirth) {
+    const year = dateOfBirth[1] ?? dateOfBirth[4];
+    const month = dateOfBirth[1] ? dateOfBirth[2] : dateOfBirth[5];
+    const day = dateOfBirth[1] ? dateOfBirth[3] : dateOfBirth[4];
+    const derivedAge = calculateAge(`${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`);
+    if (derivedAge !== null) fields.age = derivedAge;
+  }
 
   if (/\b(male|man|mannelijk|man)\b/.test(value)) fields.sex = "male";
   else if (/\b(female|vrouw|vrouwelijk|woman)\b/.test(value)) fields.sex = "female";
@@ -29,13 +68,13 @@ function deterministicFields(message: string, state: OnboardingState, profile: R
   if (kg) fields.weight_kg = Number(kg[1]);
 
   // Telegram users often answer a single requested number without its unit.
-  // Interpret a bare number only when the current state makes its meaning unambiguous.
+  // Interpret it only when the current state makes the meaning unambiguous.
+  // Age is intentionally excluded: age requires an explicit age statement.
   const bareNumber = value.match(/^\s*(\d{1,3}(?:\.\d+)?)\s*$/)?.[1];
   if (bareNumber) {
     const number = Number(bareNumber);
     if (state === "BASIC_PROFILE") {
-      if (profile.age == null && number >= 13 && number <= 100) fields.age = number;
-      else if (profile.height_cm == null && number >= 100 && number <= 250) fields.height_cm = number;
+      if (profile.height_cm == null && number >= 100 && number <= 250) fields.height_cm = number;
       else if (profile.weight_kg == null && number >= 30 && number <= 300) fields.weight_kg = number;
     } else if (state === "TRAINING_PROFILE") {
       if (profile.days_per_week == null && Number.isInteger(number) && number >= 1 && number <= 7) fields.days_per_week = number;
@@ -71,7 +110,9 @@ function deterministicFields(message: string, state: OnboardingState, profile: R
 function hasEvidenceForField(field: keyof ProfileData, message: string, state: OnboardingState, profile: Record<string, unknown>): boolean {
   const value = message.toLowerCase();
   switch (field) {
-    case "age": return /\b(age|leeftijd|i(?:'m| am| ben)\s+\d{2})\b/i.test(value);
+    case "age":
+      return /\b(age|leeftijd|i(?:'m| am| ben)\s+\d{2})\b/i.test(value) ||
+        /\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{4}\b/i.test(value);
     case "sex": return /\b(male|female|man|vrouw|mannelijk|vrouwelijk|woman)\b/i.test(value);
     case "height_cm": return /\b\d{2,3}(?:[.,]\d)?\s*(?:cm|centimeter(?:s)?)\b/i.test(value) || /(?:^|\s)\d\s*(?:ft|feet|foot|')\s*\d{0,2}/i.test(value) || (state === "BASIC_PROFILE" && profile.height_cm == null && /^\s*\d{3}(?:[.,]\d+)?\s*$/.test(value));
     case "weight_kg": return /\b\d{2,3}(?:[.,]\d+)?\s*(?:kg|kilo(?:s)?|kilogram(?:s)?)\b/i.test(value) || (state === "BASIC_PROFILE" && profile.weight_kg == null && /^\s*\d{2,3}(?:[.,]\d+)?\s*$/.test(value));
