@@ -10,7 +10,8 @@ import {
   markMessageProcessing,
   releaseProcessingLock,
 } from "@/lib/onboarding/repository";
-import { processOnboardingMessage, startOnboarding } from "@/lib/onboarding/engine";
+import { startOnboarding } from "@/lib/onboarding/engine";
+import { routeConversation } from "@/lib/onboarding/conversation-router";
 import { sendTelegramMessage } from "@/lib/telegram/client";
 
 type TelegramUpdate = {
@@ -39,8 +40,6 @@ export async function POST(request: NextRequest) {
     const user = await getOrCreateUser(message.from.id, message.from.username);
     userId = user.id;
 
-    // Idempotency happens before the slow AI work. Failed/unfinished updates
-    // are deliberately returned as retryable records by the repository.
     const inserted = await addTelegramUserMessage(user.id, message.text, update.update_id);
     if (!inserted) return NextResponse.json({ ok: true });
     messageId = inserted;
@@ -50,7 +49,7 @@ export async function POST(request: NextRequest) {
 
     const reply = message.text.trim() === "/start"
       ? await startOnboarding(user.id)
-      : await processOnboardingMessage(user.id, message.text);
+      : await routeConversation(user.id, message.text);
 
     await sendTelegramMessage(message.chat.id, reply);
     await addMessage(user.id, "assistant", reply);
@@ -59,12 +58,20 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("FitPilot Telegram webhook error", { error, userId, updateId: update.update_id });
     if (messageId) {
-      try { await markMessageFailed(messageId, error instanceof Error ? error.message : String(error)); } catch (statusError) { console.error("FitPilot message status update failed", statusError); }
+      try {
+        await markMessageFailed(messageId, error instanceof Error ? error.message : String(error));
+      } catch (statusError) {
+        console.error("FitPilot message status update failed", statusError);
+      }
     }
     return NextResponse.json({ ok: false }, { status: 500 });
   } finally {
     if (userId && lockToken) {
-      try { await releaseProcessingLock(userId, lockToken); } catch (releaseError) { console.error("FitPilot lock release failed", releaseError); }
+      try {
+        await releaseProcessingLock(userId, lockToken);
+      } catch (releaseError) {
+        console.error("FitPilot lock release failed", releaseError);
+      }
     }
   }
 }
