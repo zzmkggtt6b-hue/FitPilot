@@ -19,7 +19,6 @@ function calculateAge(dateOfBirth: string): number | null {
   const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const dob = new Date(Date.UTC(year, month - 1, day));
 
-  // Reject impossible dates instead of letting JavaScript normalize them.
   if (
     dob.getUTCFullYear() !== year ||
     dob.getUTCMonth() !== month - 1 ||
@@ -40,10 +39,20 @@ function deterministicFields(message: string, state: OnboardingState, profile: R
   const value = message.toLowerCase().replace(/,/g, ".");
   const fields: Partial<ProfileData> = {};
 
-  // Age must be explicit, or derived from a complete birth date in a standard
-  // numeric format. A bare number is deliberately never treated as an age.
-  const age = value.match(/\b(?:age|leeftijd)\s*[:=]?\s*(\d{2})\b|\bi(?:'m| am| ben)\s+(\d{2})\b/);
-  if (age) fields.age = Number(age[1] ?? age[2]);
+  // Age is intentionally strict. Outside the explicit age step, a bare number
+  // is never an age. At the age step, however, a single 13-100 number is
+  // unambiguous because FitPilot has just asked for the user's age.
+  const age = value.match(/\b(?:age|leeftijd)\s*[:=]?\s*(\d{2})\b|\bi(?:'m| am| ben)\s+(\d{2})\b|\b(\d{2})\s*(?:years?\s*old|jaar(?:\s+oud)?)\b/);
+  if (age) {
+    const parsedAge = Number(age[1] ?? age[2] ?? age[3]);
+    if (parsedAge >= 13 && parsedAge <= 100) fields.age = parsedAge;
+  } else if (state === "BASIC_PROFILE" && profile.age == null) {
+    const bareAge = value.match(/^\s*(\d{2})\s*$/)?.[1];
+    if (bareAge) {
+      const parsedAge = Number(bareAge);
+      if (parsedAge >= 13 && parsedAge <= 100) fields.age = parsedAge;
+    }
+  }
 
   const dateOfBirth = value.match(/\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b|\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b/);
   if (dateOfBirth) {
@@ -54,7 +63,7 @@ function deterministicFields(message: string, state: OnboardingState, profile: R
     if (derivedAge !== null) fields.age = derivedAge;
   }
 
-  if (/\b(male|man|mannelijk|man)\b/.test(value)) fields.sex = "male";
+  if (/\b(male|man|mannelijk)\b/.test(value)) fields.sex = "male";
   else if (/\b(female|vrouw|vrouwelijk|woman)\b/.test(value)) fields.sex = "female";
 
   const cm = value.match(/\b(\d{2,3}(?:\.\d)?)\s*(?:cm|centimeter(?:s)?)\b/);
@@ -69,7 +78,7 @@ function deterministicFields(message: string, state: OnboardingState, profile: R
 
   // Telegram users often answer a single requested number without its unit.
   // Interpret it only when the current state makes the meaning unambiguous.
-  // Age is intentionally excluded: age requires an explicit age statement.
+  // Age is handled separately above and is only allowed during the age step.
   const bareNumber = value.match(/^\s*(\d{1,3}(?:\.\d+)?)\s*$/)?.[1];
   if (bareNumber) {
     const number = Number(bareNumber);
@@ -111,7 +120,8 @@ function hasEvidenceForField(field: keyof ProfileData, message: string, state: O
   const value = message.toLowerCase();
   switch (field) {
     case "age":
-      return /\b(age|leeftijd|i(?:'m| am| ben)\s+\d{2})\b/i.test(value) ||
+      return /\b(age|leeftijd|i(?:'m| am| ben)\s+\d{2}|\d{2}\s*(?:years?\s*old|jaar(?:\s+oud)?))\b/i.test(value) ||
+        (state === "BASIC_PROFILE" && profile.age == null && /^\s*\d{2}\s*$/.test(value)) ||
         /\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{4}\b/i.test(value);
     case "sex": return /\b(male|female|man|vrouw|mannelijk|vrouwelijk|woman)\b/i.test(value);
     case "height_cm": return /\b\d{2,3}(?:[.,]\d)?\s*(?:cm|centimeter(?:s)?)\b/i.test(value) || /(?:^|\s)\d\s*(?:ft|feet|foot|')\s*\d{0,2}/i.test(value) || (state === "BASIC_PROFILE" && profile.height_cm == null && /^\s*\d{3}(?:[.,]\d+)?\s*$/.test(value));
@@ -127,7 +137,6 @@ function sanitizeExtractedFields(extracted: Partial<ProfileData>, message: strin
 }
 
 function mergeFields(deterministic: Partial<ProfileData>, extracted: Partial<ProfileData>): Partial<ProfileData> {
-  // Deterministic parsing wins when both parsers found a value in the user's text.
   return { ...extracted, ...deterministic };
 }
 
