@@ -9,6 +9,7 @@ export const ONBOARDING_STATES = [
   "PREFERENCES",
   "REVIEW",
   "COMPLETED",
+  "PAUSED",
 ] as const;
 
 export type OnboardingState = (typeof ONBOARDING_STATES)[number];
