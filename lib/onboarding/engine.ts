@@ -1,7 +1,7 @@
 import { generateGoalAdvice } from "@/lib/ai/advice";
 import { nextState } from "./state-machine";
 import { ensureSession, loadProfile, resetProfile, saveProfile, setState } from "./repository";
-import { isLanguageChange, parseLanguage } from "./language";
+import { detectLanguage, isLanguageChange, parseLanguage } from "./language";
 import { routeProfileMessage } from "./router";
 import type { OnboardingState } from "./types";
 
@@ -25,14 +25,14 @@ function isProfileSummaryRequest(message: string) { return /\b(what do you know 
 function isGoalAdviceRequest(message: string) { return /\b(wat (kan|zou) je (mij )?(adviseren|aanraden)|wat raad je (mij )?aan|geen idee (wat|welk|welke)|ik weet (het )?niet (wat|welk|welke)|help me (choose|kiezen)|which goal|what goal|recommend.*goal|advice.*goal|doel.*advies|advies.*doel)\b/i.test(message); }
 function isStop(message: string) { return /^\/(stop|pause)$|^(stop|pauze|pause)$/i.test(message.trim()); }
 function isResume(message: string) { return /^\/(resume|continue)$|^(resume|doorgaan|continue|ga door)$/i.test(message.trim()); }
-function isExplanationRequest(message: string) { return /\b(waarom|waarvoor|why|what.*for|do i need|moet ik|moet dit|heb je dit nodig|is dit nodig|waar is dit voor)\b/i.test(message); }
-function isQuestion(message: string) { return /[?]|\b(waarom|waarvoor|hoe|wat|welke|kan je|kun je|why|what|how|which|can you)\b/i.test(message.trim()); }
+function isExplanationRequest(message: string) { return /\b(waarom|waarvoor|why|what.*for|do i need|moet ik|moet dit|heb je dit nodig|is dit nodig|waar is dit voor|why do you need|why is this needed)\b/i.test(message); }
+function isQuestion(message: string) { return /[?]|\b(waarom|waarvoor|hoe|wat|welke|kan je|kun je|why|what|how|which|can you|do you)\b/i.test(message.trim()); }
 
 function conversionReply(message: string, language: "nl" | "en"): string | null {
   const normalized = message.toLowerCase().replace(/,/g, ".").trim();
   const number = "(\\d+(?:\\.\\d+)?)";
   const match = normalized.match(new RegExp(`^${number}\\s*(cm|centimeter(?:s)?)\\s*(?:naar|to|in)\\s*(m|meter(?:s)?)$`));
-  if (match) { const value = Number(match[1]); const result = value / 100; return language === "en" ? `${value} cm = ${result} m.` : `${value} cm = ${result} m.`; }
+  if (match) { const value = Number(match[1]); const result = value / 100; return `${value} cm = ${result} m.`; }
   const reverse = normalized.match(new RegExp(`^${number}\\s*(m|meter(?:s)?)\\s*(?:naar|to|in)\\s*(cm|centimeter(?:s)?)$`));
   if (reverse) { const value = Number(reverse[1]); const result = value * 100; return `${value} m = ${result} cm.`; }
   const kgToLb = normalized.match(new RegExp(`^${number}\\s*(kg|kilo(?:s)?|kilogram(?:s)?)\\s*(?:naar|to|in)\\s*(lb|lbs|pound(?:s)?)$`));
@@ -44,24 +44,44 @@ function conversionReply(message: string, language: "nl" | "en"): string | null 
 
 function scopeReply(profile: Record<string, unknown>): string {
   return languageFor(profile) === "en"
-    ? "I’m FitPilot’s onboarding bot. I can help collect and structure your fitness profile and handle simple fitness-related conversions, but I can’t answer general questions outside the onboarding flow."
-    : "Ik ben de FitPilot-onboardingbot. Ik help je fitnessprofiel opbouwen en kan eenvoudige fitnessgerelateerde conversies doen, maar ik kan geen algemene vragen buiten de onboarding beantwoorden.";
+    ? "I’m FitPilot’s onboarding bot. I can collect and structure your fitness profile and handle simple fitness-related conversions, but I’m not a general-purpose question-answering bot. Please keep questions within the onboarding/profile-building flow."
+    : "Ik ben de FitPilot-onboardingbot. Ik kan je fitnessprofiel opbouwen en eenvoudige fitnessgerelateerde conversies doen, maar ik ben geen algemene vraag-en-antwoordbot. Houd vragen binnen de onboarding en het opbouwen van je fitnessprofiel.";
+}
+
+function unsupportedLanguageReply(profile: Record<string, unknown>): string {
+  if (profile.language === "en") return "I can only communicate in Dutch or English. Please continue in one of those two languages.";
+  return "Ik spreek alleen Nederlands of Engels. Ga alsjeblieft verder in een van deze twee talen.";
+}
+
+function looksLikeUnsupportedLanguage(message: string): boolean {
+  const value = message.trim().toLowerCase();
+  if (!/[a-zà-ÿ]/i.test(value)) return false;
+  const neutral = new Set(["cm", "m", "kg", "lb", "lbs", "pound", "pounds", "kilo", "kilos", "centimeter", "centimeters", "meter", "meters", "min", "mins", "minute", "minutes", "ft", "feet", "foot", "in", "inch", "inches", "januari", "january", "februari", "february", "maart", "march", "april", "mei", "may", "juni", "june", "juli", "july", "augustus", "august", "september", "oktober", "october", "november", "december"]);
+  const tokens = value.replace(/[^a-zà-ÿ]+/gi, " ").split(/\s+/).filter(Boolean);
+  if (tokens.length === 0 || tokens.every((token) => neutral.has(token))) return false;
+  return detectLanguage(value) === null;
 }
 
 function missingPrompt(state: OnboardingState, profile: Record<string, unknown>): string {
   const en = languageFor(profile) === "en";
   if (state === "BASIC_PROFILE") {
     if (profile.age == null) return prompts.BASIC_PROFILE[en ? "en" : "nl"];
-    if (profile.sex == null) return prompts.FITNESS_PROFILE[en ? "en" : "nl"];
-    if (profile.height_cm == null) return en ? "What is your height in cm?" : "Wat is je lengte in cm?";
-    if (profile.weight_kg == null) return en ? "What is your weight in kg?" : "Wat is je gewicht in kg?";
+    if (profile.sex == null) return en
+      ? "What is your sex? You can answer 'male', 'female' or 'other'. This helps FitPilot account for scientifically established sex-related differences in physiology, performance and some health/nutrition considerations when those differences are relevant. It does not mean every recommendation is different for men and women."
+      : "Wat is je geslacht? Je kunt 'man', 'vrouw' of 'anders' antwoorden. Dit helpt FitPilot rekening te houden met wetenschappelijk vastgestelde seksegerelateerde verschillen in fysiologie, prestaties en sommige gezondheids- en voedingsfactoren wanneer die relevant zijn. Dat betekent niet dat ieder advies voor mannen en vrouwen anders is.";
+    if (profile.height_cm == null) return en
+      ? "What is your height in cm? Height helps scale exercise selection and load and improves the interpretation of body-size-related measurements."
+      : "Wat is je lengte in cm? Lengte helpt om oefeningen en belasting beter af te stemmen en om metingen die samenhangen met lichaamsgrootte beter te interpreteren.";
+    if (profile.weight_kg == null) return en
+      ? "What is your weight in kg? Weight helps estimate body-size-related training loads and energy requirements and helps interpret changes over time."
+      : "Wat is je gewicht in kg? Gewicht helpt om trainingsbelasting en energiebehoefte beter te schatten en om veranderingen over tijd te interpreteren.";
     return "";
   }
-  if (state === "FITNESS_PROFILE" && profile.experience_level == null) return en ? "How much training experience do you have?" : "Hoeveel ervaring heb je met trainen?";
+  if (state === "FITNESS_PROFILE" && profile.experience_level == null) return en ? "How much training experience do you have? This helps set an appropriate starting volume, intensity and exercise complexity." : "Hoeveel ervaring heb je met trainen? Dit helpt om het startvolume, de intensiteit en de complexiteit van oefeningen passend te kiezen.";
   if (state === "TRAINING_PROFILE") {
-    if (profile.training_location == null) return en ? "Where do you usually train: gym, home or both?" : "Waar train je meestal: sportschool, thuis of beide?";
-    if (profile.days_per_week == null) return en ? "How many days per week do you usually train?" : "Hoeveel dagen per week train je meestal?";
-    if (profile.session_duration_minutes == null) return en ? "How long is your typical workout, in minutes?" : "Hoe lang duurt je training meestal, in minuten?";
+    if (profile.training_location == null) return en ? "Where do you usually train: gym, home or both? This determines which exercises and equipment are realistically available." : "Waar train je meestal: sportschool, thuis of beide? Dit bepaalt welke oefeningen en materialen realistisch beschikbaar zijn.";
+    if (profile.days_per_week == null) return en ? "How many days per week do you usually train? This lets FitPilot distribute training volume and recovery across the week." : "Hoeveel dagen per week train je meestal? Zo kan FitPilot trainingsvolume en herstel over de week verdelen.";
+    if (profile.session_duration_minutes == null) return en ? "How long is your typical workout, in minutes? This helps fit the program to the time you actually have and prioritize the most effective work." : "Hoe lang duurt je training meestal, in minuten? Zo kan FitPilot het programma afstemmen op de tijd die je daadwerkelijk hebt en de belangrijkste oefeningen prioriteren.";
     return "";
   }
   if (state === "GOALS" && (!Array.isArray(profile.goals) || profile.goals.length === 0)) return prompts.GOALS[languageFor(profile)];
@@ -105,9 +125,9 @@ function allowedStrictFields(field: StrictField | null): string[] {
 }
 
 function strictExplanation(profile: Record<string, unknown>, prompt: string): string {
-  return languageFor(profile) === "en"
-    ? `${prompt}\n\nAt this step I only need this information for the onboarding flow, so I can build your fitness profile correctly. Other profile information can be provided when I ask for it.`
-    : `${prompt}\n\nBij deze stap heb ik alleen deze informatie nodig voor de onboarding, zodat ik je fitnessprofiel correct kan opbouwen. Andere profielinformatie kun je geven wanneer ik daar om vraag.`;
+  return `${prompt}\n\n${languageFor(profile) === "en"
+    ? "I’m asking for this specific data because it changes how FitPilot can personalize your profile and later recommendations. I only use differences that are supported by scientific evidence; sex is one example where physiology can differ on average, while individual variation is still important."
+    : "Ik vraag deze specifieke informatie omdat die bepaalt hoe FitPilot je profiel en latere adviezen kan personaliseren. Ik gebruik alleen verschillen die door wetenschappelijk bewijs worden ondersteund; geslacht is bijvoorbeeld een factor waarbij fysiologie gemiddeld kan verschillen, terwijl individuele verschillen altijd belangrijk blijven."}`;
 }
 
 function strictRejection(profile: Record<string, unknown>, prompt: string): string {
@@ -131,10 +151,29 @@ export async function processOnboardingMessage(userId: string, message: string):
   let currentLanguage = languageFor(profile);
   const trimmed = message.trim();
 
-  const conversion = conversionReply(trimmed, currentLanguage);
-  if (conversion) return conversion + "\n\n" + (state === "COMPLETED" ? "" : missingPrompt(state, profile));
-
   if (/^\/restart$/i.test(trimmed)) { await resetProfile(userId); await setState(userId, "LANGUAGE"); return prompts.LANGUAGE.nl; }
+
+  // Detect supported language from the actual message, not only explicit
+  // "English/Nederlands" commands. This keeps every next response aligned.
+  const detectedLanguage = detectLanguage(trimmed);
+  if (detectedLanguage && detectedLanguage !== currentLanguage) {
+    await saveProfile(userId, { language: detectedLanguage });
+    profile = await loadProfile(userId);
+    currentLanguage = detectedLanguage;
+  }
+
+  if (state === "LANGUAGE") {
+    const selected = parseLanguage(trimmed) ?? detectedLanguage;
+    if (!selected) return "Ik spreek alleen Nederlands of Engels. / I only speak Dutch or English. Please choose Nederlands or English.";
+    await saveProfile(userId, { language: selected }); await setState(userId, "CONSENT");
+    return prompts.CONSENT[selected];
+  }
+
+  if (looksLikeUnsupportedLanguage(trimmed)) return unsupportedLanguageReply(profile);
+
+  const conversion = conversionReply(trimmed, currentLanguage);
+  if (conversion) return conversion + (state === "COMPLETED" ? "" : "\n\n" + missingPrompt(state, profile));
+
   if (isStop(trimmed)) {
     if (state === "COMPLETED") return currentLanguage === "en" ? "Your profile is already complete." : "Je profiel is al compleet.";
     if (state !== "PAUSED") await setState(userId, "PAUSED", false, state);
@@ -155,12 +194,6 @@ export async function processOnboardingMessage(userId: string, message: string):
     currentLanguage = directLanguage;
     if (state === "CONSENT") return prompts.CONSENT[directLanguage];
     return missingPrompt(state, profile) || (directLanguage === "en" ? "Got it. We’ll continue in English." : "Prima. We gaan verder in het Nederlands.");
-  }
-
-  if (state === "LANGUAGE") {
-    if (!directLanguage) return "Kies alsjeblieft Nederlands of English. 🇳🇱 / 🇬🇧";
-    await saveProfile(userId, { language: directLanguage }); await setState(userId, "CONSENT");
-    return prompts.CONSENT[directLanguage];
   }
   if (isLanguageChange(trimmed)) {
     const parsed = parseLanguage(trimmed);
@@ -189,7 +222,6 @@ export async function processOnboardingMessage(userId: string, message: string):
     const allowed = allowedStrictFields(strictField);
     const keys = Object.keys(routedFields);
     const hasOnlyRequestedData = keys.length > 0 && keys.every((key) => allowed.includes(key));
-
     if (!hasOnlyRequestedData) return strictRejection(profile, prompt);
 
     await saveProfile(userId, routedFields);
@@ -203,13 +235,9 @@ export async function processOnboardingMessage(userId: string, message: string):
   const routed = await routeProfileMessage({ state, message, profile, currentLanguage });
   const fields = { ...routed.fields };
   const { language: _language, ...profileFields } = fields;
-  if (Object.keys(profileFields).length > 0) {
-    await saveProfile(userId, profileFields);
-    profile = await loadProfile(userId);
-  }
+  if (Object.keys(profileFields).length > 0) { await saveProfile(userId, profileFields); profile = await loadProfile(userId); }
   const newState = nextState(state, profile);
   if (newState !== state) await setState(userId, newState);
-
   if (newState === "GOALS" && isGoalAdviceRequest(trimmed)) return generateGoalAdvice(profile, languageFor(profile));
   if (newState === "REVIEW") return summary(profile) + (languageFor(profile) === "en" ? "\n\nDoes this look correct? Reply 'yes' to confirm, or tell me what to change." : "\n\nKlopt dit? Antwoord 'ja' om te bevestigen, of vertel wat ik moet aanpassen.");
   if (isProfileSummaryRequest(trimmed)) return summary(profile);
