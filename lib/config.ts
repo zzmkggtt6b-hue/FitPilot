@@ -16,6 +16,6 @@ export const env = envSchema.parse({
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
   TELEGRAM_WEBHOOK_SECRET: process.env.TELEGRAM_WEBHOOK_SECRET,
   GEMINI_API_KEY: process.env.GEMINI_API_KEY,
-  GEMINI_MODEL: process.env.GEMINI_MODEL,
+  GEMINI_MODEL: process.env.GEMINI_MODEL || "gemini-2.5-flash",
   APP_URL: process.env.APP_URL,
 });
