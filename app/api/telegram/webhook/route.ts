@@ -5,6 +5,9 @@ import {
   addMessage,
   addTelegramUserMessage,
   getOrCreateUser,
+  markMessageCompleted,
+  markMessageFailed,
+  markMessageProcessing,
   releaseProcessingLock,
 } from "@/lib/onboarding/repository";
 import { processOnboardingMessage, startOnboarding } from "@/lib/onboarding/engine";
@@ -30,17 +33,18 @@ export async function POST(request: NextRequest) {
 
   let userId: string | undefined;
   let lockToken: string | undefined;
-  let userMessageInserted = false;
+  let messageId: string | undefined;
 
   try {
     const user = await getOrCreateUser(message.from.id, message.from.username);
     userId = user.id;
 
-    // Persist the Telegram message before taking the slow AI lock. This makes
-    // redeliveries idempotent even when the previous attempt failed mid-flight.
-    const isNew = await addTelegramUserMessage(user.id, message.text, update.update_id);
-    if (!isNew) return NextResponse.json({ ok: true });
-    userMessageInserted = true;
+    // Idempotency happens before the slow AI work. Failed/unfinished updates
+    // are deliberately returned as retryable records by the repository.
+    const inserted = await addTelegramUserMessage(user.id, message.text, update.update_id);
+    if (!inserted) return NextResponse.json({ ok: true });
+    messageId = inserted;
+    await markMessageProcessing(messageId);
 
     lockToken = await acquireProcessingLock(user.id);
 
@@ -48,19 +52,14 @@ export async function POST(request: NextRequest) {
       ? await startOnboarding(user.id)
       : await processOnboardingMessage(user.id, message.text);
 
-    await addMessage(user.id, "assistant", reply);
     await sendTelegramMessage(message.chat.id, reply);
+    await addMessage(user.id, "assistant", reply);
+    await markMessageCompleted(messageId);
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("FitPilot Telegram webhook error", { error, userId, updateId: update.update_id });
-    // Telegram retries non-2xx responses. Returning 200 after the user message
-    // was durably recorded prevents an identical update from creating a loop.
-    // The persisted user message can be retried/reprocessed separately.
-    if (userMessageInserted) return NextResponse.json({ ok: true });
-    try {
-      await sendTelegramMessage(message.chat.id, "Sorry, er ging iets mis. Probeer het over een moment opnieuw.");
-    } catch (sendError) {
-      console.error("FitPilot Telegram error reply failed", sendError);
+    if (messageId) {
+      try { await markMessageFailed(messageId, error instanceof Error ? error.message : String(error)); } catch (statusError) { console.error("FitPilot message status update failed", statusError); }
     }
     return NextResponse.json({ ok: false }, { status: 500 });
   } finally {
