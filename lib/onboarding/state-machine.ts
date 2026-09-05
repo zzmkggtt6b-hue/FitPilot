@@ -6,7 +6,7 @@ export function nextState(state: OnboardingState, profile: Record<string, unknow
   if (state === "CONSENT") return "BASIC_PROFILE";
   if (state === "PAUSED" || state === "COMPLETED") return state;
 
-  const hasBasic = profile.age != null && profile.height_cm != null && profile.weight_kg != null;
+  const hasBasic = profile.age != null && profile.sex != null && profile.height_cm != null && profile.weight_kg != null;
   if (state === "BASIC_PROFILE" && hasBasic) return "FITNESS_PROFILE";
 
   if (state === "FITNESS_PROFILE" && profile.experience_level != null) return "TRAINING_PROFILE";
@@ -22,7 +22,7 @@ export function nextState(state: OnboardingState, profile: Record<string, unknow
 export function missingFields(state: OnboardingState, profile: Record<string, unknown>): string[] {
   switch (state) {
     case "BASIC_PROFILE":
-      return ["age", "height_cm", "weight_kg"].filter((key) => profile[key] == null);
+      return ["age", "sex", "height_cm", "weight_kg"].filter((key) => profile[key] == null);
     case "FITNESS_PROFILE":
       return profile.experience_level == null ? ["experience_level"] : [];
     case "TRAINING_PROFILE":

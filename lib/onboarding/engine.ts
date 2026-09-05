@@ -10,7 +10,7 @@ const prompts: Record<OnboardingState, { nl: string; en: string }> = {
   LANGUAGE: { nl: "In welke taal wil je verder? 🇳🇱 Nederlands of 🇬🇧 English?", en: "Which language would you like to continue in? 🇳🇱 Nederlands or 🇬🇧 English?" },
   CONSENT: { nl: "Voordat we beginnen: je deelt persoonlijke fitnessgegevens. FitPilot gebruikt die alleen om je profiel en coaching te leveren. Ga je hiermee akkoord? (ja/nee)", en: "Before we start: you will share personal fitness data. FitPilot uses it only to provide your profile and coaching. Do you agree? (yes/no)" },
   BASIC_PROFILE: { nl: "Wat is je leeftijd? Je kunt je huidige leeftijd geven, of je geboortedatum in het formaat DD MM YYYY (bijvoorbeeld 11 11 1990) of als dag maand jaar (bijvoorbeeld 11 november 1990).", en: "How old are you? You can give your current age, or your date of birth in the format DD MM YYYY (for example 11 11 1990) or as day month year (for example 11 November 1990)." },
-  FITNESS_PROFILE: { nl: "Hoeveel ervaring heb je met trainen?", en: "How much training experience do you have?" },
+  FITNESS_PROFILE: { nl: "Wat is je geslacht? Je kunt bijvoorbeeld 'man', 'vrouw' of 'anders' antwoorden.", en: "What is your sex? You can answer for example 'male', 'female' or 'other'." },
   TRAINING_PROFILE: { nl: "Waar train je meestal: sportschool, thuis of beide?", en: "Where do you usually train: gym, home or both?" },
   GOALS: { nl: "Wat is je belangrijkste doel? Bijvoorbeeld spiermassa, vetverlies, kracht, algemene fitheid, conditie of recompositie.", en: "What is your main goal? For example: muscle gain, fat loss, strength, general fitness, endurance or body recomposition." },
   PREFERENCES: { nl: "Zijn er voorkeuren, oefeningen die je graag doet, oefeningen die je wilt vermijden of materiaalbeperkingen waarmee ik rekening moet houden? Je kunt ook gewoon 'geen' zeggen.", en: "Do you have preferences, exercises you like, exercises you want to avoid, or equipment limitations I should consider? You can also say 'none'." },
@@ -26,11 +26,33 @@ function isGoalAdviceRequest(message: string) { return /\b(wat (kan|zou) je (mij
 function isStop(message: string) { return /^\/(stop|pause)$|^(stop|pauze|pause)$/i.test(message.trim()); }
 function isResume(message: string) { return /^\/(resume|continue)$|^(resume|doorgaan|continue|ga door)$/i.test(message.trim()); }
 function isExplanationRequest(message: string) { return /\b(waarom|waarvoor|why|what.*for|do i need|moet ik|moet dit|heb je dit nodig|is dit nodig|waar is dit voor)\b/i.test(message); }
+function isQuestion(message: string) { return /[?]|\b(waarom|waarvoor|hoe|wat|welke|kan je|kun je|why|what|how|which|can you)\b/i.test(message.trim()); }
+
+function conversionReply(message: string, language: "nl" | "en"): string | null {
+  const normalized = message.toLowerCase().replace(/,/g, ".").trim();
+  const number = "(\\d+(?:\\.\\d+)?)";
+  const match = normalized.match(new RegExp(`^${number}\\s*(cm|centimeter(?:s)?)\\s*(?:naar|to|in)\\s*(m|meter(?:s)?)$`));
+  if (match) { const value = Number(match[1]); const result = value / 100; return language === "en" ? `${value} cm = ${result} m.` : `${value} cm = ${result} m.`; }
+  const reverse = normalized.match(new RegExp(`^${number}\\s*(m|meter(?:s)?)\\s*(?:naar|to|in)\\s*(cm|centimeter(?:s)?)$`));
+  if (reverse) { const value = Number(reverse[1]); const result = value * 100; return `${value} m = ${result} cm.`; }
+  const kgToLb = normalized.match(new RegExp(`^${number}\\s*(kg|kilo(?:s)?|kilogram(?:s)?)\\s*(?:naar|to|in)\\s*(lb|lbs|pound(?:s)?)$`));
+  if (kgToLb) { const value = Number(kgToLb[1]); const result = Math.round(value * 2.2046226218 * 100) / 100; return `${value} kg = ${result} lb.`; }
+  const lbToKg = normalized.match(new RegExp(`^${number}\\s*(lb|lbs|pound(?:s)?)\\s*(?:naar|to|in)\\s*(kg|kilo(?:s)?|kilogram(?:s)?)$`));
+  if (lbToKg) { const value = Number(lbToKg[1]); const result = Math.round(value * 0.45359237 * 100) / 100; return `${value} lb = ${result} kg.`; }
+  return null;
+}
+
+function scopeReply(profile: Record<string, unknown>): string {
+  return languageFor(profile) === "en"
+    ? "I’m FitPilot’s onboarding bot. I can help collect and structure your fitness profile and handle simple fitness-related conversions, but I can’t answer general questions outside the onboarding flow."
+    : "Ik ben de FitPilot-onboardingbot. Ik help je fitnessprofiel opbouwen en kan eenvoudige fitnessgerelateerde conversies doen, maar ik kan geen algemene vragen buiten de onboarding beantwoorden.";
+}
 
 function missingPrompt(state: OnboardingState, profile: Record<string, unknown>): string {
   const en = languageFor(profile) === "en";
   if (state === "BASIC_PROFILE") {
     if (profile.age == null) return prompts.BASIC_PROFILE[en ? "en" : "nl"];
+    if (profile.sex == null) return prompts.FITNESS_PROFILE[en ? "en" : "nl"];
     if (profile.height_cm == null) return en ? "What is your height in cm?" : "Wat is je lengte in cm?";
     if (profile.weight_kg == null) return en ? "What is your weight in kg?" : "Wat is je gewicht in kg?";
     return "";
@@ -61,6 +83,7 @@ type StrictField = keyof Record<string, unknown>;
 function currentStrictField(state: OnboardingState, profile: Record<string, unknown>): StrictField | null {
   if (state === "BASIC_PROFILE") {
     if (profile.age == null) return "age";
+    if (profile.sex == null) return "sex";
     if (profile.height_cm == null) return "height_cm";
     if (profile.weight_kg == null) return "weight_kg";
   }
@@ -108,6 +131,9 @@ export async function processOnboardingMessage(userId: string, message: string):
   let currentLanguage = languageFor(profile);
   const trimmed = message.trim();
 
+  const conversion = conversionReply(trimmed, currentLanguage);
+  if (conversion) return conversion + "\n\n" + (state === "COMPLETED" ? "" : missingPrompt(state, profile));
+
   if (/^\/restart$/i.test(trimmed)) { await resetProfile(userId); await setState(userId, "LANGUAGE"); return prompts.LANGUAGE.nl; }
   if (isStop(trimmed)) {
     if (state === "COMPLETED") return currentLanguage === "en" ? "Your profile is already complete." : "Je profiel is al compleet.";
@@ -147,10 +173,16 @@ export async function processOnboardingMessage(userId: string, message: string):
     await saveProfile(userId, { consent: true }); await setState(userId, "BASIC_PROFILE"); profile = await loadProfile(userId); currentLanguage = languageFor(profile); return missingPrompt("BASIC_PROFILE", profile);
   }
 
+  if (state === "COMPLETED") {
+    if (isProfileSummaryRequest(trimmed)) return summary(profile);
+    return scopeReply(profile);
+  }
+
   const strictField = currentStrictField(state, profile);
   if (strictField) {
     const prompt = missingPrompt(state, profile);
     if (isExplanationRequest(trimmed)) return strictExplanation(profile, prompt);
+    if (isQuestion(trimmed)) return scopeReply(profile) + "\n\n" + prompt;
 
     const routed = await routeProfileMessage({ state, message, profile, currentLanguage });
     const routedFields = Object.fromEntries(Object.entries(routed.fields).filter(([key]) => key !== "language"));
@@ -181,5 +213,6 @@ export async function processOnboardingMessage(userId: string, message: string):
   if (newState === "GOALS" && isGoalAdviceRequest(trimmed)) return generateGoalAdvice(profile, languageFor(profile));
   if (newState === "REVIEW") return summary(profile) + (languageFor(profile) === "en" ? "\n\nDoes this look correct? Reply 'yes' to confirm, or tell me what to change." : "\n\nKlopt dit? Antwoord 'ja' om te bevestigen, of vertel wat ik moet aanpassen.");
   if (isProfileSummaryRequest(trimmed)) return summary(profile);
-  return missingPrompt(newState, profile);
+  if (isQuestion(trimmed)) return scopeReply(profile) + "\n\n" + missingPrompt(newState, profile);
+  return missingPrompt(newState, profile) || scopeReply(profile);
 }
