@@ -70,7 +70,6 @@ export async function processOnboardingMessage(userId: string, message: string):
   let currentLanguage = languageFor(profile);
   const trimmed = message.trim();
 
-  // Commands always win over profile extraction.
   if (/^\/restart$/i.test(trimmed)) { await resetProfile(userId); await setState(userId, "LANGUAGE"); return prompts.LANGUAGE.nl; }
   if (isStop(trimmed)) {
     if (state === "COMPLETED") return currentLanguage === "en" ? "Your profile is already complete." : "Je profiel is al compleet.";
@@ -85,28 +84,35 @@ export async function processOnboardingMessage(userId: string, message: string):
   }
   if (isResume(trimmed)) return missingPrompt(state, profile);
 
-  // LANGUAGE and CONSENT are hard gates because they control whether profile data may be stored.
+  // Language selection/change always has priority, including during the consent gate.
+  const directLanguage = parseLanguage(trimmed);
+  if (directLanguage && state !== "LANGUAGE") {
+    await saveProfile(userId, { language: directLanguage });
+    profile = await loadProfile(userId);
+    currentLanguage = directLanguage;
+    if (state === "CONSENT") return prompts.CONSENT[directLanguage];
+    return missingPrompt(state, profile) || (directLanguage === "en" ? "Got it. We’ll continue in English." : "Prima. We gaan verder in het Nederlands.");
+  }
+
   if (state === "LANGUAGE") {
-    const language = parseLanguage(trimmed);
-    if (!language) return "Kies alsjeblieft Nederlands of English. 🇳🇱 / 🇬🇧";
-    await saveProfile(userId, { language }); await setState(userId, "CONSENT");
-    return prompts.CONSENT[language];
+    if (!directLanguage) return "Kies alsjeblieft Nederlands of English. 🇳🇱 / 🇬🇧";
+    await saveProfile(userId, { language: directLanguage }); await setState(userId, "CONSENT");
+    return prompts.CONSENT[directLanguage];
   }
   if (isLanguageChange(trimmed)) {
     const parsed = parseLanguage(trimmed);
     if (parsed) { await saveProfile(userId, { language: parsed }); profile = await loadProfile(userId); currentLanguage = parsed; return missingPrompt(state, profile) || (parsed === "en" ? "Got it. We’ll continue in English." : "Prima. We gaan verder in het Nederlands."); }
   }
+
   if (state === "CONSENT") {
     const consent = /^(ja|yes|y|akkoord|agree|i agree|ik ga akkoord)$/i.test(trimmed);
     if (!consent) return currentLanguage === "en" ? "No problem. Without consent I can’t save a personal fitness profile. Send 'yes' to continue, or tell me if you want to switch language." : "Geen probleem. Zonder akkoord kan ik geen persoonlijk fitnessprofiel opslaan. Stuur 'ja' om door te gaan, of zeg het als je van taal wilt wisselen.";
-    await saveProfile(userId, { consent: true }); await setState(userId, "BASIC_PROFILE"); profile = await loadProfile(userId); return missingPrompt("BASIC_PROFILE", profile);
+    await saveProfile(userId, { consent: true }); await setState(userId, "BASIC_PROFILE"); profile = await loadProfile(userId); currentLanguage = languageFor(profile); return missingPrompt("BASIC_PROFILE", profile);
   }
 
-  // The profile builder is the central router. It extracts facts independently of the current state.
   const routed = await routeProfileMessage({ state, message, profile, currentLanguage });
   const fields = { ...routed.fields };
 
-  // Persist every valid fact before handling the conversational intent. A question must never discard facts.
   const { language: _language, ...profileFields } = fields;
   if (Object.keys(profileFields).length > 0) {
     await saveProfile(userId, profileFields);
@@ -119,11 +125,8 @@ export async function processOnboardingMessage(userId: string, message: string):
     currentLanguage = routed.language;
   }
 
-  if (routed.extraction.intent === "restart") {
-    await resetProfile(userId); await setState(userId, "LANGUAGE"); return prompts.LANGUAGE.nl;
-  }
+  if (routed.extraction.intent === "restart") { await resetProfile(userId); await setState(userId, "LANGUAGE"); return prompts.LANGUAGE.nl; }
 
-  // Explicit profile summary is handled after merging, so the summary reflects the latest message.
   if (isProfileSummaryRequest(trimmed) || routed.extraction.intent === "question") {
     const next = missingPrompt(state, profile);
     return `${currentLanguage === "en" ? "Good question. Here’s what I currently have:" : "Goede vraag. Dit is wat ik momenteel van je heb:"}\n\n${summary(profile)}${next ? `\n\n${next}` : ""}`;
