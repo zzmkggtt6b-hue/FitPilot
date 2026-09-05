@@ -72,7 +72,16 @@ export async function processOnboardingMessage(userId: string, message: string):
   if (state === "PAUSED") { if (!isResume(trimmed)) return promptFor("PAUSED", profile); state = (session.paused_from_state as OnboardingState | null) ?? "BASIC_PROFILE"; await setState(userId, state); profile = await loadProfile(userId); return missingPrompt(state, profile); }
   if (isResume(trimmed)) return missingPrompt(state, profile);
 
-  // Language switching is handled before AI extraction so it can never be hijacked by the model.
+  // LANGUAGE is a hard deterministic boundary. Do not let the generic language-change handler run first.
+  if (state === "LANGUAGE") {
+    const language = parseLanguage(trimmed);
+    if (!language) return "Kies alsjeblieft Nederlands of English. 🇳🇱 / 🇬🇧";
+    await saveProfile(userId, { language });
+    await setState(userId, "CONSENT");
+    return prompts.CONSENT[language];
+  }
+
+  // Language switching after LANGUAGE is handled before AI extraction.
   if (isLanguageChange(trimmed)) {
     const parsed = parseLanguage(trimmed);
     if (parsed) {
@@ -84,13 +93,6 @@ export async function processOnboardingMessage(userId: string, message: string):
   }
 
   if (isProfileSummaryRequest(trimmed)) return summary(profile) + (state === "REVIEW" ? (currentLanguage === "en" ? "\n\nDoes this look correct? Reply 'yes' to confirm, or tell me what to change." : "\n\nKlopt dit? Antwoord 'ja' om te bevestigen, of vertel wat ik moet aanpassen.") : (missingPrompt(state, profile) ? `\n\n${missingPrompt(state, profile)}` : ""));
-  if (state === "LANGUAGE") {
-    const language = parseLanguage(trimmed);
-    if (!language) return "Kies alsjeblieft Nederlands of English. 🇳🇱 / 🇬🇧";
-    await saveProfile(userId, { language });
-    await setState(userId, "CONSENT");
-    return prompts.CONSENT[language];
-  }
   if (state === "CONSENT") { const consent = /^(ja|yes|y|akkoord|agree)$/i.test(trimmed); if (!consent) return currentLanguage === "en" ? "No problem. Without consent I can’t save a personal fitness profile. Send 'yes' to continue, or tell me if you want to switch language." : "Geen probleem. Zonder akkoord kan ik geen persoonlijk fitnessprofiel opslaan. Stuur 'ja' om door te gaan, of zeg het als je van taal wilt wisselen."; await saveProfile(userId, { consent: true }); await setState(userId, "BASIC_PROFILE"); return prompts.BASIC_PROFILE[currentLanguage]; }
   if (state === "COMPLETED") return currentLanguage === "en" ? "Your profile is already complete. Type /restart if you want to start over." : "Je profiel is al compleet. Typ /restart als je opnieuw wilt beginnen.";
   if (state === "REVIEW" && /^(ja|yes|y|klopt|correct)$/i.test(trimmed)) { await setState(userId, "COMPLETED", true); return currentLanguage === "en" ? "Profile confirmed! 🎉 Your FitPilot profile has been saved." : "Profiel bevestigd! 🎉 Je FitPilot-profiel is opgeslagen."; }
