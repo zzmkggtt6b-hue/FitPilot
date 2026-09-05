@@ -26,19 +26,23 @@ export async function POST(request: NextRequest) {
 
   const update = (await request.json()) as TelegramUpdate;
   const message = update.message;
-  if (!message?.text || !message.chat?.id || !message.from?.id) return NextResponse.json({ ok: true });
+  if (!message?.text || message.chat?.id == null || message.from?.id == null) return NextResponse.json({ ok: true });
 
   let userId: string | undefined;
   let lockToken: string | undefined;
+  let userMessageInserted = false;
+
   try {
     const user = await getOrCreateUser(message.from.id, message.from.username);
     userId = user.id;
-    lockToken = await acquireProcessingLock(user.id);
 
-    // Telegram's update_id is globally unique for updates delivered by a bot.
-    // If Telegram redelivers the same update, log it once and do not answer twice.
+    // Persist the Telegram message before taking the slow AI lock. This makes
+    // redeliveries idempotent even when the previous attempt failed mid-flight.
     const isNew = await addTelegramUserMessage(user.id, message.text, update.update_id);
     if (!isNew) return NextResponse.json({ ok: true });
+    userMessageInserted = true;
+
+    lockToken = await acquireProcessingLock(user.id);
 
     const reply = message.text.trim() === "/start"
       ? await startOnboarding(user.id)
@@ -48,8 +52,16 @@ export async function POST(request: NextRequest) {
     await sendTelegramMessage(message.chat.id, reply);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    console.error("FitPilot Telegram webhook error", error);
-    try { await sendTelegramMessage(message.chat.id, "Sorry, er ging iets mis. Probeer het over een moment opnieuw."); } catch (sendError) { console.error("FitPilot Telegram error reply failed", sendError); }
+    console.error("FitPilot Telegram webhook error", { error, userId, updateId: update.update_id });
+    // Telegram retries non-2xx responses. Returning 200 after the user message
+    // was durably recorded prevents an identical update from creating a loop.
+    // The persisted user message can be retried/reprocessed separately.
+    if (userMessageInserted) return NextResponse.json({ ok: true });
+    try {
+      await sendTelegramMessage(message.chat.id, "Sorry, er ging iets mis. Probeer het over een moment opnieuw.");
+    } catch (sendError) {
+      console.error("FitPilot Telegram error reply failed", sendError);
+    }
     return NextResponse.json({ ok: false }, { status: 500 });
   } finally {
     if (userId && lockToken) {
